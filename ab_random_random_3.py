@@ -115,8 +115,17 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
         if reverse:
             for user in user_answers_dict.keys():
                 user_answers_dict[user] = user_answers_dict[user][::-1]
+
+        def _user_answers(answers):
+            answers = answers[:min(len(answers), length)]
+            nones = [None for _ in range(length - len(answers))]
+            if reverse:
+                return nones + answers
+            else:
+                return answers + nones
+
         user_answers = [
-            answers[:min(len(answers), length)] + [None for _ in range(length - min(len(answers), length))]
+            _user_answers(answers)
             for answers in user_answers_dict.itervalues()
             if user_length is None or len(answers) >= user_length
         ]

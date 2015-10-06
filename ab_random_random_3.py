@@ -64,22 +64,48 @@ def load_data(answer_limit, filter_invalid_tests=True):
     invalid_users = answers[answers['response_time'] < 0]['user_id'].unique()
     answers = answers[~answers['user_id'].isin(invalid_users)]
 
+    answers = pandas.merge(answers, flashcards, on='item_id', how='inner')
+
     if filter_invalid_tests:
         invalid_users = set()
         last_user = None
         last_context = None
         counter = None
-        for row in iterdicts(answers.sort(['user_id', 'context_id', 'id'])):
-            if last_user != row['user_id'] or last_context != row['context_id']:
+        for row in iterdicts(answers.sort(['user_id', 'context_name', 'term_type', 'id'])):
+            if last_user != row['user_id'] or last_context != (row['context_name'], row['term_type']):
                 last_user = row['user_id']
-                last_context = row['context_id']
+                last_context = (row['context_name'], row['term_type'])
                 counter = 0
             if row['metainfo_id'] == 1 and counter % 10 != 0:
                 invalid_users.add(row['user_id'])
             counter += 1
         answers = answers[~answers['user_id'].isin(invalid_users)]
 
-    return pandas.merge(answers, flashcards, on='item_id', how='inner').sort(['user_id', 'id'])
+    return answers.sort(['user_id', 'id'])
+
+
+def milestone_progress(data, length, with_confidence=False):
+    user_answers = data.groupby('user_id').apply(len).to_dict().values()
+
+    def _progress_confidence(i):
+        xs = zip(map(lambda x: x > i, user_answers), map(lambda x: x > i - 10, user_answers))
+        aggr = lambda xs: sum(zip(*xs)[0]) / float(sum(zip(*xs)[1]))
+        value = aggr(xs)
+        if False and ((isinstance(with_confidence, bool) and with_confidence) or (isinstance(with_confidence, list) and i in with_confidence)):
+            confidence = bootstrap.ci(xs, aggr, method='pi')
+        else:
+            confidence = (value, value)
+        return {
+            'value': value,
+            'confidence_interval_min': confidence[0],
+            'confidence_interval_max': confidence[1],
+        }
+
+    result = []
+    for i in range(10, 10 * length + 1, 10):
+        result.append(_progress_confidence(i))
+    return result
+
 
 
 def progress(data, length=60, with_confidence=False):
@@ -88,7 +114,7 @@ def progress(data, length=60, with_confidence=False):
     def _progress_confidence(i):
         xs = map(lambda x: x > i, user_answers)
         value = numpy.mean(xs)
-        if with_confidence:
+        if (isinstance(with_confidence, bool) and with_confidence) or (isinstance(with_confidence, list) and i in with_confidence):
             confidence = bootstrap.ci(xs, numpy.mean, method='pi')
         else:
             confidence = (value, value)
@@ -112,14 +138,14 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
         user_answers_dict = defaultdict(list)
         for row in iterdicts(group):
             user_answers_dict[row['user_id']].append(row['item_asked_id'] == row['item_answered_id'])
-        if reverse:
-            for user in user_answers_dict.keys():
-                user_answers_dict[user] = user_answers_dict[user][::-1]
 
         def _user_answers(answers):
+            if reverse:
+                answers = answers[::-1]
             answers = answers[:min(len(answers), length)]
             nones = [None for _ in range(length - len(answers))]
             if reverse:
+                answers = answers[::-1]
                 return nones + answers
             else:
                 return answers + nones
@@ -129,8 +155,6 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
             for answers in user_answers_dict.itervalues()
             if user_length is None or len(answers) >= user_length
         ]
-        if reverse:
-            user_answers = map(lambda xs: xs[::-1], user_answers)
 
         def _mean_with_numbers(xs):
             xs_filtered = filter(lambda x: x is not None, xs)
@@ -140,11 +164,15 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
             return map(lambda x: (x[0] - curve[0][0], x[1]), curve)
         else:
             return curve
-    context_curves = filter(lambda x: len(x) != 0, data.groupby(['context_name', 'term_type']).apply(_learning_curve))
+    context_curves_dict = {key: val for (key, val) in data.groupby(['context_name', 'term_type']).apply(_learning_curve).iteritems() if len(val) != 0}
+    context_curves = context_curves_dict.values()
 
     def _weighted_mean(xs):
         xs = filter(lambda x: not numpy.isnan(x[0]), xs)
-        return sum(map(lambda x: x[0] * x[1], xs)) / float(sum(map(lambda x: x[1], xs)))
+        return {
+            'value': sum(map(lambda x: x[0] * x[1], xs)) / float(sum(map(lambda x: x[1], xs))),
+            'size': sum(map(lambda x: x[1], xs)),
+        }
     return map(_weighted_mean, zip(*context_curves))
 
 
@@ -153,10 +181,10 @@ def test_questions(data, length=100):
     last_context = None
     counter = None
     result = defaultdict(lambda: 0)
-    for row in iterdicts(data.sort(['user_id', 'context_id', 'id'])):
-        if last_user != row['user_id'] or last_context != row['context_id']:
+    for row in iterdicts(data.sort(['user_id', 'context_name', 'term_type', 'id'])):
+        if last_user != row['user_id'] or last_context != (row['context_name'], row['term_type']):
             last_user = row['user_id']
-            last_context = row['context_id']
+            last_context = (row['context_name'], row['term_type'])
             counter = 0
         if row['metainfo_id'] == 1 and counter < length:
             result[counter] += 1
@@ -224,8 +252,8 @@ def meta(data):
     }
 
 
-def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False):
-    data = load_data(answer_limit, filter_invalid_tests=filter_invalid_tests)
+def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False):
+    data = pa.get_raw_data('answers',  load_data, 'experiment_cache', answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests)
     if term_type is not None:
         if not isinstance(term_type, list):
             term_type = [term_type]
@@ -244,121 +272,152 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
         groupped = data.groupby('experiment_setup_name')
         groupped_all = data_all.groupby('experiment_setup_name')
         result = {
-            'learning_points': groupped.apply(lambda g: learning_points(g, length=curve_length)).to_dict(),
-            'learning_curve_all': groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict(),
-            'learning_curve_all_reverse': groupped.apply(lambda g: learning_curve(g, length=curve_length, reverse=True)).to_dict(),
-            'learning_curve': groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length)).to_dict(),
-            'learning_curve_reverse': groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length, reverse=True)).to_dict(),
-            'response_time_curve_all': groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict(),
-            'response_time_curve': groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length)).to_dict(),
-            'test_questions_hist': groupped_all.apply(lambda g: test_questions(g, length=progress_length)).to_dict(),
             'meta': groupped_all.apply(meta).to_dict(),
             'meta_all': meta(data_all),
         }
+        if keys is None or 'learning_points' in keys:
+            result['learning_points'] = groupped.apply(lambda g: learning_points(g, length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_all' in keys:
+            result['learning_curve_all'] = groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_all_reverse' in keys:
+            result['learning_curve_all_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, reverse=True)).to_dict()
+        if keys is None or 'learning_curve' in keys:
+            result['learning_curve'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_reverse' in keys:
+            result['learning_curve_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length, reverse=True)).to_dict()
+        if keys is None or 'response_time_curve_all' in keys:
+            result['response_time_curve_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict()
+        if keys is None or 'response_time_curve' in keys:
+            result['response_time_curve'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length)).to_dict()
+        if keys is None or 'test_questions_hist' in keys:
+            result['test_questions_hist'] = groupped_all.apply(lambda g: test_questions(g, length=progress_length)).to_dict()
+
         if extended:
-            result['progress'] = groupped_all.apply(lambda g: progress(g, length=progress_length, with_confidence=with_confidence)).to_dict()
+            if keys is None or 'progress' in keys:
+                result['progress'] = groupped_all.apply(lambda g: progress(g, length=progress_length, with_confidence=with_confidence)).to_dict()
+            if keys is None or 'progress_milestones' in keys:
+                result['progress_milestones'] = groupped_all.apply(lambda g: milestone_progress(g, length=progress_length / 10, with_confidence=with_confidence)).to_dict()
         return result
-    return {
+    result = {
         'all': _group_experiment_data(data, extended=True),
-        'contexts': {
+    }
+    if contexts:
+        result['contexts'] = {
             '{}, {}'.format(context_name, term_type): value
             for ((context_name, term_type), value) in data.groupby(['context_name', 'term_type']).apply(_group_experiment_data).to_dict().iteritems()
-        },
-    }
+        }
+    return result
 
 
 def plot_experiment_data(experiment_data, filename):
-    rcParams['figure.figsize'] = 15, 5
-    plt.subplot(121)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-    plt.title('All Users')
+    if 'learning_curve_all' in experiment_data.get('all', {}) and 'learning_curve' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all'].items())):
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+        plt.title('All Users')
 
-    plt.subplot(122)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-    plt.title('Filtered Users')
-    plt.legend(loc=4, frameon=True)
-    plt.savefig('{}_learning_curve_all.svg'.format(filename))
+        plt.subplot(122)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve'].items())):
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+        plt.title('Filtered Users')
+        plt.legend(loc=4, frameon=True)
+        plt.savefig('{}_learning_curve_all.svg'.format(filename))
+        plt.close()
+
+    if 'learning_curve_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_reverse' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all_reverse'].items())):
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+        plt.title('All Users')
+
+        plt.subplot(122)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_reverse'].items())):
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+
+        plt.title('Filtered Users')
+        plt.legend(loc=4, frameon=True)
+        plt.savefig('{}_learning_curve_all_reverse.svg'.format(filename))
+        plt.close()
+
+    if 'progress' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['progress'].items())):
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i])
+        plt.legend(loc=1, frameon=True)
+        plt.title('Stay curve')
+        plt.xlabel('Number of attempts')
+
+        plt.subplot(122)
+        to_plot = zip(*sorted(experiment_data['all']['progress'].items()))
+        to_plot[1] = map(lambda x: x[10], to_plot[1])
+        xs = numpy.arange(len(to_plot[0]))
+        ys = map(lambda d: d['value'], to_plot[1])
+        errors = map(numpy.array, zip(*map(lambda d: [d['confidence_interval_min'], d['confidence_interval_max']], to_plot[1])))
+        plt.ylim(0.6, 0.8)
+        plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
+        plt.gca().yaxis.grid(True)
+        plt.xticks(xs + 0.35, to_plot[0], rotation=10)
+        plt.title('Users having at least 11 answers')
+        plt.xlabel('Variant of algorithm for question construction')
+        plt.tight_layout()
+        plt.savefig('{}_progress_all.png'.format(filename))
+        plt.close()
+
+    if 'progress_milestones' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 5
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['progress_milestones'].items())):
+            plt.plot(range(11, 11 + 10 * len(data), 10), map(lambda x: x['value'], data), label=group_name, color=COLORS[i], marker=MARKERS[i])
+        plt.legend(loc=4, frameon=True)
+        plt.title('Stay curve (milestones)')
+        plt.xlabel('Number of attempts')
+        plt.tight_layout()
+        plt.savefig('{}_progress_milestones_all.png'.format(filename))
+        plt.close()
+
     plt.close()
+    if 'test_questions_hist' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 5
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['test_questions_hist'].items())):
+            length = max(data.keys())
+            for i in range(int(length)):
+                if i not in data:
+                    data[i] = 0
+            to_plot = zip(*sorted(data.items()))
+            plt.plot(to_plot[0], to_plot[1], label=group_name)
+        plt.legend(loc=1, frameon=True)
+        plt.savefig('{}_test_questions.svg'.format(filename))
+        plt.close()
 
-    rcParams['figure.figsize'] = 15, 5
-    plt.subplot(121)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all_reverse'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-    plt.title('All Users')
+    if 'response_time_curve_all' in experiment_data.get('all', {}) and 'response_time_curve' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve_all'].items())):
+            plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
+        plt.title('All Users')
 
-    plt.subplot(122)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_reverse'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
+        plt.subplot(122)
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve'].items())):
+            plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
+        plt.title('Filtered Users')
+        plt.legend(loc=1, frameon=True)
+        plt.savefig('{}_response_time_all.svg'.format(filename))
+        plt.close()
 
-    plt.title('Filtered Users')
-    plt.legend(loc=4, frameon=True)
-    plt.savefig('{}_learning_curve_all_reverse.svg'.format(filename))
-    plt.close()
-
-    rcParams['figure.figsize'] = 15, 5
-    plt.subplot(121)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['progress'].items())):
-        plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i])
-    plt.legend(loc=1, frameon=True)
-    plt.title('Stay curve')
-    plt.xlabel('Number of attempts')
-
-    plt.subplot(122)
-    to_plot = zip(*sorted(experiment_data['all']['progress'].items()))
-    to_plot[1] = map(lambda x: x[10], to_plot[1])
-    xs = numpy.arange(len(to_plot[0]))
-    ys = map(lambda d: d['value'], to_plot[1])
-    errors = map(numpy.array, zip(*map(lambda d: [d['confidence_interval_min'], d['confidence_interval_max']], to_plot[1])))
-    plt.ylim(0.6, 0.8)
-    plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
-    plt.gca().yaxis.grid(True)
-    plt.xticks(xs + 0.35, to_plot[0], rotation=10)
-    plt.title('Users having at least 11 answers')
-    plt.xlabel('Variant of algorithm for question construction')
-    plt.tight_layout()
-    plt.savefig('{}_progress_all.png'.format(filename))
-    plt.close()
-
-    rcParams['figure.figsize'] = 7.5, 5
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['test_questions_hist'].items())):
-        length = max(data.keys())
-        for i in range(int(length)):
-            if i not in data:
-                data[i] = 0
-        to_plot = zip(*sorted(data.items()))
-        plt.plot(to_plot[0], to_plot[1], label=group_name)
-    plt.legend(loc=1, frameon=True)
-    plt.savefig('{}_test_questions.svg'.format(filename))
-    plt.close()
-
-    rcParams['figure.figsize'] = 15, 5
-    plt.subplot(121)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve_all'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-    plt.title('All Users')
-
-    plt.subplot(122)
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve'].items())):
-        plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-    plt.title('Filtered Users')
-    plt.legend(loc=1, frameon=True)
-    plt.savefig('{}_response_time_all.svg'.format(filename))
-    plt.close()
-
-    contexts_to_plot = sorted(experiment_data['contexts'].items(), key=lambda (_, val): -val['meta_all']['answers'])[:4]
+    contexts_to_plot = sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:4]
     if len(contexts_to_plot) == 4:
         rcParams['figure.figsize'] = 15, 20
         for i, (context, data) in enumerate(contexts_to_plot, start=1):
             plt.subplot(4, 2, 2 * i - 1)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all'].items())):
-                plt.plot(range(len(group_data)), group_data, label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
             plt.title('{}, all'.format(context))
 
             plt.subplot(4, 2, 2 * i)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve'].items())):
-                plt.plot(range(len(group_data)), group_data, label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
             plt.title('{}, filtered'.format(context))
             if i == 1:
                 plt.legend(loc=4, frameon=True)
@@ -381,26 +440,27 @@ def plot_experiment_data(experiment_data, filename):
         plt.savefig('{}_response_time_curve_contexts.svg'.format(filename))
         plt.close()
 
-    rcParams['figure.figsize'] = 10, 10
-    for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_points'].items())):
-        to_plot = defaultdict(lambda: {})
-        for row in data:
-            to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
-        ax = plt.subplot(2, 2, i)
-        plt.title(group_name)
-        ax.set_xticks(numpy.arange(len(to_plot[0])) + 0.5,  minor=False)
-        ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
-        pcolor = ax.pcolor(numpy.array([zip(*xs.items())[1] for (_, xs) in sorted(to_plot.items())]), cmap=plt.cm.RdYlGn, vmin=0, vmax=1)
-        plt.colorbar(pcolor)
-    plt.tight_layout()
-    plt.savefig('{}_learning_points_all.png'.format(filename))
-    plt.close()
+    if 'learning_points' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 10, 10
+        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_points'].items())):
+            to_plot = defaultdict(lambda: {})
+            for row in data:
+                to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
+            ax = plt.subplot(2, 2, i)
+            plt.title(group_name)
+            ax.set_xticks(numpy.arange(len(to_plot[0])) + 0.5,  minor=False)
+            ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
+            pcolor = ax.pcolor(numpy.array([zip(*xs.items())[1] for (_, xs) in sorted(to_plot.items())]), cmap=plt.cm.RdYlGn, vmin=0, vmax=1)
+            plt.colorbar(pcolor)
+        plt.tight_layout()
+        plt.savefig('{}_learning_points_all.png'.format(filename))
+        plt.close()
 
 
 plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, progress_length=50,
-    with_confidence=True
+    answer_limit=1, progress_length=100,
+    with_confidence=[10]
 ), 'random_random')

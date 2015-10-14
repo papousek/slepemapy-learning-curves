@@ -437,6 +437,8 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
         }
         if keys is None or 'learning_points' in keys:
             result['learning_points'] = groupped.apply(lambda g: learning_points(g, length=curve_length)).to_dict()
+        if keys is None or 'learning_points_all' in keys:
+            result['learning_points_all'] = learning_points(data, length=curve_length)
         if keys is None or 'learning_curve_all' in keys:
             result['learning_curve_all'] = groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict()
         if keys is None or 'learning_curve_fit_all' in keys:
@@ -764,6 +766,29 @@ def plot_experiment_data(experiment_data, filename):
             plt.title(group_name)
             _savefig(filename, 'learning_surface_{}'.format(group_name))
             plt.close()
+
+    if 'learning_points_all' in experiment_data.get('all', {}):
+        to_plot = defaultdict(lambda: {})
+        for row in experiment_data['all']['learning_points_all']:
+            to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
+        ax = plt.gca(projection='3d')
+        data = _get_data(to_plot)
+        xs = numpy.arange(len(data[0]))
+        ys = numpy.arange(len(data))
+        xs, ys = numpy.meshgrid(xs, ys)
+        surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.RdYlGn, linewidth=0, antialiased=False)
+        ax.set_zlim(0, 1)
+        plt.colorbar(surface)
+        ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
+        plt.title('Learning surface')
+        ax.set_xlabel('\n\nTime')
+        ax.set_ylabel('\nAttempt')
+        ax.set_zlabel('\nError rate')
+        _savefig(filename, 'learning_surface_all'.format(group_name))
+        plt.close()
+
+
+
 
 
 plot_experiment_data(pa.get_experiment_data(

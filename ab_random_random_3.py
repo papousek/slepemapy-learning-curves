@@ -492,7 +492,7 @@ def plot_line(data):
 
 def plot_experiment_data(experiment_data, filename):
     if 'learning_curve_all' in experiment_data.get('all', {}) and 'learning_curve' in experiment_data.get('all', {}):
-        rcparams['figure.figsize'] = 15, 5
+        rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         plot_line(experiment_data['all']['learning_curve_all'])
         plt.title('all users')
@@ -501,7 +501,7 @@ def plot_experiment_data(experiment_data, filename):
         plot_line(experiment_data['all']['learning_curve'])
         plt.title('filtered users')
 
-        plt.legend(loc=1, frameon=true, ncol=2)
+        plt.legend(loc=1, frameon=True, ncol=2)
         _savefig(filename, 'learning_curve_all')
         plt.close()
 

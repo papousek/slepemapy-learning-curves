@@ -541,6 +541,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.xlabel('Attempt')
 
         _savefig(filename, 'learning_curve_combined')
+        plt.close()
 
 
     if 'progress' in experiment_data.get('all', {}):

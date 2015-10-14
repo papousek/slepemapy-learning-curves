@@ -19,7 +19,14 @@ import os
 import scikits.bootstrap as bootstrap
 
 
-SNS_STYLE = {'style': 'white', 'font_scale': 1.8}
+SNS_STYLE = {
+    'style': 'whitegrid',
+    'font_scale': 1.8,
+    'rc': {
+        'grid.linestyle': ':',
+    }
+}
+MARKER_SIZE = 10
 sns.set(**SNS_STYLE)
 
 
@@ -478,86 +485,61 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
-def plot_line(data):
+def plot_line(data, with_confidence=True):
     for i, (group_name, group_data) in enumerate(sorted(data.items())):
-        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i])
-        plt.fill_between(
-            range(len(group_data)),
-            map(lambda x: x['confidence_interval_min'], group_data),
-            map(lambda x: x['confidence_interval_max'], group_data),
-            color=COLORS[i], alpha=0.35
-        )
+        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE)
+        if with_confidence:
+            plt.fill_between(
+                range(len(group_data)),
+                map(lambda x: x['confidence_interval_min'], group_data),
+                map(lambda x: x['confidence_interval_max'], group_data),
+                color=COLORS[i], alpha=0.35
+            )
         plt.xlim(0, len(group_data) - 1)
 
 
 def ylim_learning_curve():
-    plt.ylim(0, 0.7)
+    plt.ylim(0, 0.6)
 
 
 def plot_experiment_data(experiment_data, filename):
-    if 'learning_curve_all' in experiment_data.get('all', {}) and 'learning_curve' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 15, 5
-        plt.subplot(121)
+    if {'learning_curve_all', 'learning_curve', 'learning_curve_reverse', 'learning_curve_fit_all', 'learning_curve_fit', 'learning_curve_fit_reverse'} <= set(experiment_data.get('all', {}).keys()):
+        rcParams['figure.figsize'] = 22.5, 10
+        plt.subplot(231)
         ylim_learning_curve()
         plot_line(experiment_data['all']['learning_curve_all'])
-        plt.title('all users')
+        plt.title('All users')
+        plt.ylabel('Error rate')
+        plt.legend(loc=1, frameon=True, ncol=2)
 
-        plt.subplot(122)
+        plt.subplot(232)
         plot_line(experiment_data['all']['learning_curve'])
         ylim_learning_curve()
-        plt.title('filtered users')
+        plt.title('Filtered users')
 
-        plt.legend(loc=1, frameon=True, ncol=2)
-        _savefig(filename, 'learning_curve_all')
-        plt.close()
-
-    if 'learning_curve_fit_all' in experiment_data.get('all', {}) and 'learning_curve_fit' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 15, 5
-        plt.subplot(121)
-        plot_line(experiment_data['all']['learning_curve_fit_all'])
-        ylim_learning_curve()
-        plt.title('All Users')
-
-        plt.subplot(122)
-        plot_line(experiment_data['all']['learning_curve_fit'])
-        ylim_learning_curve()
-        plt.title('Filtered Users')
-
-        plt.legend(loc=1, frameon=True, ncol=2)
-        _savefig(filename, 'learning_curve_fit_all')
-        plt.close()
-
-    if 'learning_curve_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_reverse' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 15, 5
-        plt.subplot(121)
-        plot_line(experiment_data['all']['learning_curve_all_reverse'])
-        ylim_learning_curve()
-        plt.title('All users')
-
-        plt.subplot(122)
+        plt.subplot(233)
         plot_line(experiment_data['all']['learning_curve_reverse'])
         ylim_learning_curve()
+        plt.title('Filtered users, reverse')
 
-        plt.title('Filtered users')
-        plt.legend(loc=1, frameon=True, ncol=2)
-        _savefig(filename, 'learning_curve_all_reverse')
-        plt.close()
-
-    if 'learning_curve_fit_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_fit_reverse' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 15, 5
-        plt.subplot(121)
-        plot_line(experiment_data['all']['learning_curve_fit_all_reverse'])
+        plt.subplot(234)
         ylim_learning_curve()
-        plt.title('All users')
+        plot_line(experiment_data['all']['learning_curve_fit_all'], with_confidence=False)
+        plt.ylabel('Error rate')
+        plt.xlabel('Attempt')
 
-        plt.subplot(122)
-        plot_line(experiment_data['all']['learning_curve_fit_reverse'])
+        plt.subplot(235)
+        plot_line(experiment_data['all']['learning_curve_fit'], with_confidence=False)
         ylim_learning_curve()
-        plt.title('Filtered users')
+        plt.xlabel('Attempt')
 
-        plt.legend(loc=1, frameon=True, ncol=2)
-        _savefig(filename, 'learning_curve_fit_all_reverse')
-        plt.close()
+        plt.subplot(236)
+        plot_line(experiment_data['all']['learning_curve_fit_reverse'], with_confidence=False)
+        ylim_learning_curve()
+        plt.xlabel('Attempt')
+
+        _savefig(filename, 'learning_curve_combined')
+
 
     if 'progress' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
@@ -577,7 +559,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.ylim(0.6, 0.8)
         plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
         plt.gca().yaxis.grid(True)
-        plt.xticks(xs + 0.35, to_plot[0], rotation=10)
+        plt.xticks(xs + 0.35, to_plot[0])
         plt.title('Users having at least 11 answers')
         plt.xlabel('Variant of algorithm for question construction')
         _savefig(filename, 'progress_all')
@@ -789,7 +771,5 @@ plot_experiment_data(pa.get_experiment_data(
     compute_experiment_data,
     'experiment_cache', cached=True,
     answer_limit=1, curve_length=10, progress_length=100, contexts=False,
-    keys=None, school=False
-    #keys=['learning_points']
-    #keys=['attrition_bias', 'learning_curve_all', 'learning_curve', 'learning_curve_all_reverse', 'learning_curve_reverse']
+    keys=None, bootstrap_samples=1000
 ), 'random_random')

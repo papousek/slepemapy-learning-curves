@@ -490,15 +490,21 @@ def plot_line(data):
         plt.xlim(0, len(group_data) - 1)
 
 
+def ylim_learning_curve():
+    plt.ylim(0, 0.7)
+
+
 def plot_experiment_data(experiment_data, filename):
     if 'learning_curve_all' in experiment_data.get('all', {}) and 'learning_curve' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
+        ylim_learning_curve()
         plot_line(experiment_data['all']['learning_curve_all'])
         plt.title('all users')
 
         plt.subplot(122)
         plot_line(experiment_data['all']['learning_curve'])
+        ylim_learning_curve()
         plt.title('filtered users')
 
         plt.legend(loc=1, frameon=True, ncol=2)
@@ -509,10 +515,12 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         plot_line(experiment_data['all']['learning_curve_fit_all'])
+        ylim_learning_curve()
         plt.title('All Users')
 
         plt.subplot(122)
         plot_line(experiment_data['all']['learning_curve_fit'])
+        ylim_learning_curve()
         plt.title('Filtered Users')
 
         plt.legend(loc=1, frameon=True, ncol=2)
@@ -523,10 +531,12 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         plot_line(experiment_data['all']['learning_curve_all_reverse'])
+        ylim_learning_curve()
         plt.title('All users')
 
         plt.subplot(122)
         plot_line(experiment_data['all']['learning_curve_reverse'])
+        ylim_learning_curve()
 
         plt.title('Filtered users')
         plt.legend(loc=1, frameon=True, ncol=2)
@@ -537,12 +547,14 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         plot_line(experiment_data['all']['learning_curve_fit_all_reverse'])
+        ylim_learning_curve()
         plt.title('All users')
 
         plt.subplot(122)
         plot_line(experiment_data['all']['learning_curve_fit_reverse'])
-
+        ylim_learning_curve()
         plt.title('Filtered users')
+
         plt.legend(loc=1, frameon=True, ncol=2)
         _savefig(filename, 'learning_curve_fit_all_reverse')
         plt.close()

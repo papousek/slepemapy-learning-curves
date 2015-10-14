@@ -16,6 +16,7 @@ from scipy.stats import binom_test
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.mplot3d import Axes3D
 import os
+import scikits.bootstrap as bootstrap
 
 
 SNS_STYLE = {'style': 'white', 'font_scale': 1.8}
@@ -32,6 +33,41 @@ SETUP = {
 MARKERS = "dos^"
 COLORS = sns.color_palette()
 TARGET_DIR = '.'
+
+
+def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=100, reverse=False, bootstrap_samples=100):
+    confidence_vals = [[] for i in range(length)]
+
+    def _fit_learning_curve(series):
+        references_by_attempt = map(lambda references: [r for r in references if r is not None], zip(*series))
+        learning_curve = map(lambda xs: (numpy.mean(xs), len(xs)), references_by_attempt)
+
+        def _learn_fun(attempt, a, k):
+            return a * (1.0 / (attempt + 1) ** k)
+
+        opt, _ = curve_fit(
+            _learn_fun,
+            numpy.arange(len(learning_curve)),
+            numpy.array(map(lambda x: x[0], learning_curve)),
+            sigma=numpy.array(map(lambda x: 1.0 / x[1], learning_curve))
+        )
+        fit = map(lambda attempt: _learn_fun(attempt, opt[0], opt[1]), range(len(learning_curve)))
+        for i, r in enumerate(fit):
+            confidence_vals[i].append(r)
+        return fit[-1]
+
+    series = reference_series(data, length=length, user_length=user_length,
+        context_answer_limit=context_answer_limit, reverse=reverse)
+
+    bootstrap.ci(series, _fit_learning_curve, method='pi', n_samples=bootstrap_samples)
+
+    def _aggr(rs):
+        return {
+            'value': numpy.median(rs),
+            'confidence_interval_min': numpy.percentile(rs, 2),
+            'confidence_interval_max': numpy.percentile(rs, 98),
+        }
+    return map(_aggr, confidence_vals)
 
 
 def _format_time(seconds):
@@ -363,7 +399,7 @@ def meta(data):
     }
 
 
-def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None):
+def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=100):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
     data = pa.get_raw_data('answers',  load_data, 'experiment_cache',
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
@@ -396,12 +432,20 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['learning_points'] = groupped.apply(lambda g: learning_points(g, length=curve_length)).to_dict()
         if keys is None or 'learning_curve_all' in keys:
             result['learning_curve_all'] = groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_fit_all' in keys:
+            result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_all_reverse' in keys:
             result['learning_curve_all_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, reverse=True)).to_dict()
+        if keys is None or 'learning_curve_fit_all_reverse' in keys:
+            result['learning_curve_fit_all_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve' in keys:
             result['learning_curve'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_fit' in keys:
+            result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_reverse' in keys:
             result['learning_curve_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length, reverse=True)).to_dict()
+        if keys is None or 'learning_curve_fit_reverse' in keys:
+            result['learning_curve_fit_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'response_time_curve_all' in keys:
             result['response_time_curve_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict()
         if keys is None or 'response_time_curve' in keys:
@@ -434,64 +478,73 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
+def plot_line(data):
+    for i, (group_name, group_data) in enumerate(sorted(data.items())):
+        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i])
+        plt.fill_between(
+            range(len(group_data)),
+            map(lambda x: x['confidence_interval_min'], group_data),
+            map(lambda x: x['confidence_interval_max'], group_data),
+            color=COLORS[i], alpha=0.35
+        )
+        plt.xlim(0, len(group_data) - 1)
+
+
 def plot_experiment_data(experiment_data, filename):
     if 'learning_curve_all' in experiment_data.get('all', {}) and 'learning_curve' in experiment_data.get('all', {}):
+        rcparams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        plot_line(experiment_data['all']['learning_curve_all'])
+        plt.title('all users')
+
+        plt.subplot(122)
+        plot_line(experiment_data['all']['learning_curve'])
+        plt.title('filtered users')
+
+        plt.legend(loc=1, frameon=true, ncol=2)
+        _savefig(filename, 'learning_curve_all')
+        plt.close()
+
+    if 'learning_curve_fit_all' in experiment_data.get('all', {}) and 'learning_curve_fit' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
-            plt.fill_between(
-                range(len(data)),
-                map(lambda x: x['confidence_interval_min'], data),
-                map(lambda x: x['confidence_interval_max'], data),
-                color=COLORS[i], alpha=0.35
-            )
-            plt.xlim(0, len(data) - 1)
+        plot_line(experiment_data['all']['learning_curve_fit_all'])
         plt.title('All Users')
 
         plt.subplot(122)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
-            plt.fill_between(
-                range(len(data)),
-                map(lambda x: x['confidence_interval_min'], data),
-                map(lambda x: x['confidence_interval_max'], data),
-                color=COLORS[i], alpha=0.35
-            )
-            plt.xlim(0, len(data) - 1)
+        plot_line(experiment_data['all']['learning_curve_fit'])
         plt.title('Filtered Users')
+
         plt.legend(loc=1, frameon=True, ncol=2)
-        _savefig(filename, 'learning_curve_all')
+        _savefig(filename, 'learning_curve_fit_all')
         plt.close()
 
     if 'learning_curve_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_reverse' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all_reverse'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
-            plt.fill_between(
-                range(len(data)),
-                map(lambda x: x['confidence_interval_min'], data),
-                map(lambda x: x['confidence_interval_max'], data),
-                color=COLORS[i], alpha=0.35
-            )
-            plt.xlim(0, len(data) - 1)
+        plot_line(experiment_data['all']['learning_curve_all_reverse'])
         plt.title('All users')
 
         plt.subplot(122)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_reverse'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
-            plt.fill_between(
-                range(len(data)),
-                map(lambda x: x['confidence_interval_min'], data),
-                map(lambda x: x['confidence_interval_max'], data),
-                color=COLORS[i], alpha=0.35
-            )
-            plt.xlim(0, len(data) - 1)
+        plot_line(experiment_data['all']['learning_curve_reverse'])
 
         plt.title('Filtered users')
         plt.legend(loc=1, frameon=True, ncol=2)
         _savefig(filename, 'learning_curve_all_reverse')
+        plt.close()
+
+    if 'learning_curve_fit_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_fit_reverse' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        plot_line(experiment_data['all']['learning_curve_fit_all_reverse'])
+        plt.title('All users')
+
+        plt.subplot(122)
+        plot_line(experiment_data['all']['learning_curve_fit_reverse'])
+
+        plt.title('Filtered users')
+        plt.legend(loc=1, frameon=True, ncol=2)
+        _savefig(filename, 'learning_curve_fit_all_reverse')
         plt.close()
 
     if 'progress' in experiment_data.get('all', {}):

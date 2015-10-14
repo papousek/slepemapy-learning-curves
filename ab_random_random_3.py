@@ -14,6 +14,8 @@ from pylab import rcParams
 from scipy.optimize import curve_fit
 from scipy.stats import binom_test
 from matplotlib.colors import LinearSegmentedColormap
+from mpl_toolkits.mplot3d import Axes3D
+import os
 
 
 SNS_STYLE = {'style': 'white', 'font_scale': 1.8}
@@ -21,14 +23,15 @@ sns.set(**SNS_STYLE)
 
 
 SETUP = {
-    6: 'random-adaptive',
-    7: 'random-random',
-    8: 'adaptive-adaptive',
-    9: 'adaptive-random',
+    6: 'R-A',
+    7: 'R-R',
+    8: 'A-A',
+    9: 'A-R',
 }
 
 MARKERS = "dos^"
 COLORS = sns.color_palette()
+TARGET_DIR = '.'
 
 
 def _format_time(seconds):
@@ -52,9 +55,61 @@ def _format_time(seconds):
             return '{}d'.format(seconds / (3600 * 24))
 
 
+def _savefig(basename, filename):
+    if not os.path.exists(TARGET_DIR):
+        os.makedirs(TARGET_DIR)
+    plt.tight_layout()
+    plt.savefig('{}/{}_{}.png'.format(TARGET_DIR, basename, filename))
+
+
+def decorate_school(answers, threshold_in_minutes=10, threshold_people=10, user_ip=None, time_column='time', user_column='user_id'):
+    user_first_answers = answers.drop_duplicates([user_column])[[user_column, time_column]].set_index(user_column)
+    user_last_answers = answers.drop_duplicates([user_column], take_last=True)[[user_column, time_column]].set_index(user_column)
+    user_first_last = user_first_answers.join(user_last_answers, how='right', lsuffix='_first', rsuffix='_last')
+
+    def _get_classrooms(column):
+        users = []
+        total = 0
+        classrooms = []
+        for user_id, time_diff in user_first_last.sort(column)[column].diff().iteritems():
+            time_diff = time_diff / numpy.timedelta64(1, 'm') if not isinstance(time_diff, pandas.tslib.NaTType) else 0
+            if time_diff and total + time_diff <= threshold_in_minutes:
+                users.append(user_id)
+                total += time_diff
+            else:
+                if len(users) > threshold_people:
+                    classrooms.append(set(users))
+                users = []
+                total = 0
+        return classrooms
+
+    classrooms_first = _get_classrooms(time_column + '_first')
+    classrooms_last = _get_classrooms(time_column + '_last')
+    classrooms = []
+    for c_first in classrooms_first:
+        for c_last in classrooms_last:
+            c_intersection = c_first & c_last
+            if len(c_intersection) > threshold_people:
+                classrooms.append(c_intersection)
+    classroom_users = [u for c in classrooms for u in c]
+
+    if user_ip is not None:
+        school_ips = map(lambda xs: xs[0], filter(lambda (i, n): n >= 10, user_ip.groupby('ip_address').apply(lambda us: len(us[user_column].unique())).to_dict().items()))
+        school_users = user_ip[user_ip['ip_address'].isin(school_ips)][user_column].unique()
+    else:
+        school_users = None
+    school_detected = answers[user_column].apply(lambda u: u in classroom_users or (school_users is not None and u in school_users))
+    if 'school' in answers:
+        answers['school'] = answers['school'] | school_detected
+    else:
+        answers['school'] = school_detected
+    return answers
+
+
 def load_data(answer_limit, filter_invalid_tests=True, filter_invalid_response_time=True, rolling_success=False):
     answers = pandas.read_csv('./answers.csv', index_col=False, parse_dates=['time'])
     flashcards = pandas.read_csv('./flashcards.csv', index_col=False)
+    user_ip = pandas.read_csv('./ip_address.csv', index_col=False)
 
     answers['experiment_setup_name'] = answers['experiment_setup_id'].apply(lambda i: SETUP[i])
 
@@ -86,6 +141,7 @@ def load_data(answer_limit, filter_invalid_tests=True, filter_invalid_response_t
         answers = answers[~answers['user_id'].isin(invalid_users)]
 
     answers = pa.decorate_session_number(answers, 3600 * 10)
+    answers = decorate_school(answers, user_ip=user_ip)
     if rolling_success:
         answers = pa.decorate_last_in_session(answers)
         answers = pa.decorate_rolling_success(answers)
@@ -155,14 +211,17 @@ def attrition_bias(data, length=6, context_answer_limit=100):
             return []
         user_answers_dict = defaultdict(list)
         for row in iterdicts(group):
-            user_answers_dict[row['user_id']].append(row['item_asked_id'] == row['item_answered_id'])
+            user_answers_dict[row['user_id']].append(row['item_asked_id'] != row['item_answered_id'])
         return user_answers_dict.values()
 
     user_answers = [answers for context_answers in data.groupby(['context_name', 'term_type']).apply(_attrition_bias) for answers in context_answers]
     result = []
     for i in range(length):
+        value, confidence = binomial_confidence_mean([answers[0] for answers in user_answers if len(answers) > i])
         result.append({
-            'value': numpy.mean([answers[0] for answers in user_answers if len(answers) > i])
+            'value': value,
+            'confidence_interval_min': confidence[0],
+            'confidence_interval_max': confidence[1],
         })
     return result
 
@@ -185,14 +244,14 @@ def progress(data, length=60):
     return result
 
 
-def learning_curve(data, length=10, user_length=None, context_answer_limit=100, normalize=False, reverse=False):
+def learning_curve(data, length=10, user_length=None, context_answer_limit=100, reverse=False):
 
     def _learning_curve(group):
         if len(group) < context_answer_limit:
             return []
         user_answers_dict = defaultdict(list)
         for row in iterdicts(group):
-            user_answers_dict[row['user_id']].append(row['item_asked_id'] == row['item_answered_id'])
+            user_answers_dict[row['user_id']].append(row['item_asked_id'] != row['item_answered_id'])
 
         def _user_answers(answers):
             if reverse:
@@ -211,24 +270,19 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
             if user_length is None or len(answers) >= user_length
         ]
 
-        def _mean_with_numbers(xs):
-            xs_filtered = filter(lambda x: x is not None, xs)
-            return numpy.mean(xs_filtered), len(xs_filtered)
-        curve = map(_mean_with_numbers, zip(*user_answers))
-        if normalize:
-            return map(lambda x: (x[0] - curve[0][0], x[1]), curve)
-        else:
-            return curve
+        return map(lambda xs: filter(lambda x: x is not None, xs), zip(*user_answers))
     context_curves_dict = {key: val for (key, val) in data.groupby(['context_name', 'term_type']).apply(_learning_curve).iteritems() if len(val) != 0}
-    context_curves = context_curves_dict.values()
+    all_curves = [reduce(lambda x, y: x + y, xs) for xs in zip(*context_curves_dict.values())]
 
     def _weighted_mean(xs):
-        xs = filter(lambda x: not numpy.isnan(x[0]), xs)
+        value, confidence = binomial_confidence_mean(xs)
         return {
-            'value': sum(map(lambda x: x[0] * x[1], xs)) / float(sum(map(lambda x: x[1], xs))),
-            'size': sum(map(lambda x: x[1], xs)),
+            'value': value,
+            'confidence_interval_min': confidence[0],
+            'confidence_interval_max': confidence[1],
+            'size': len(xs),
         }
-    return map(_weighted_mean, zip(*context_curves))
+    return map(_weighted_mean, all_curves)
 
 
 def test_questions(data, length=100):
@@ -276,7 +330,7 @@ def learning_points(data, length=5):
         if row['user_id'] in user_answers:
             user_answers[row['user_id']].append((
                 row['time'],
-                (row['time'] - user_answers[row['user_id']][0][0]).total_seconds(),
+                (row['time'] - user_answers[row['user_id']][-1][0]).total_seconds(),
                 len(user_answers[row['user_id']]),
                 row['item_asked_id'] == row['item_answered_id']
             ))
@@ -296,7 +350,6 @@ def learning_points(data, length=5):
         for lower, upper in thresholds:
             filtered = map(lambda xs: xs[3], filter(lambda xs: xs[1] >= lower and xs[1] < upper and xs[2] == attempt, answers))
             result.append((attempt, lower, None if len(filtered) < 30 else numpy.mean(filtered), len(filtered)))
-
     return result
 
 
@@ -307,7 +360,7 @@ def meta(data):
     }
 
 
-def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True):
+def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
     data = pa.get_raw_data('answers',  load_data, 'experiment_cache',
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
@@ -325,6 +378,8 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
         if not isinstance(context_name, list):
             context_name = [context_name]
         data = data[data['context_name'].isin(context_name)]
+    if school is not None:
+        data = data[data['school'] == school]
 
     def _group_experiment_data(data_all, extended=False):
         data = data_all[data_all['metainfo_id'] == 1]
@@ -381,31 +436,59 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
+            plt.fill_between(
+                range(len(data)),
+                map(lambda x: x['confidence_interval_min'], data),
+                map(lambda x: x['confidence_interval_max'], data),
+                color=COLORS[i], alpha=0.35
+            )
+            plt.xlim(0, len(data) - 1)
         plt.title('All Users')
 
         plt.subplot(122)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
+            plt.fill_between(
+                range(len(data)),
+                map(lambda x: x['confidence_interval_min'], data),
+                map(lambda x: x['confidence_interval_max'], data),
+                color=COLORS[i], alpha=0.35
+            )
+            plt.xlim(0, len(data) - 1)
         plt.title('Filtered Users')
-        plt.legend(loc=4, frameon=True)
-        plt.savefig('{}_learning_curve_all.svg'.format(filename))
+        plt.legend(loc=1, frameon=True, ncol=2)
+        _savefig(filename, 'learning_curve_all')
         plt.close()
 
     if 'learning_curve_all_reverse' in experiment_data.get('all', {}) and 'learning_curve_reverse' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_all_reverse'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
+            plt.fill_between(
+                range(len(data)),
+                map(lambda x: x['confidence_interval_min'], data),
+                map(lambda x: x['confidence_interval_max'], data),
+                color=COLORS[i], alpha=0.35
+            )
+            plt.xlim(0, len(data) - 1)
         plt.title('All users')
 
         plt.subplot(122)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_curve_reverse'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i])
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, marker=MARKERS[i], color=COLORS[i])
+            plt.fill_between(
+                range(len(data)),
+                map(lambda x: x['confidence_interval_min'], data),
+                map(lambda x: x['confidence_interval_max'], data),
+                color=COLORS[i], alpha=0.35
+            )
+            plt.xlim(0, len(data) - 1)
 
         plt.title('Filtered users')
-        plt.legend(loc=4, frameon=True)
-        plt.savefig('{}_learning_curve_all_reverse.svg'.format(filename))
+        plt.legend(loc=1, frameon=True, ncol=2)
+        _savefig(filename, 'learning_curve_all_reverse')
         plt.close()
 
     if 'progress' in experiment_data.get('all', {}):
@@ -429,8 +512,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.xticks(xs + 0.35, to_plot[0], rotation=10)
         plt.title('Users having at least 11 answers')
         plt.xlabel('Variant of algorithm for question construction')
-        plt.tight_layout()
-        plt.savefig('{}_progress_all.png'.format(filename))
+        _savefig(filename, 'progress_all')
         plt.close()
 
     if 'progress_milestones' in experiment_data.get('all', {}):
@@ -440,8 +522,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.legend(loc=4, frameon=True)
         plt.title('Stay curve (milestones)')
         plt.xlabel('Number of attempts')
-        plt.tight_layout()
-        plt.savefig('{}_progress_milestones_all.png'.format(filename))
+        _savefig(filename, 'progress_milestones_all')
         plt.close()
 
     if 'output_rolling_success' in experiment_data.get('all', {}):
@@ -453,8 +534,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.title('Output rolling success')
         plt.xlabel('Rolling success')
         plt.ylabel('Probability')
-        plt.tight_layout()
-        plt.savefig('{}_output_rolling_success.png'.format(filename))
+        _savefig(filename, 'output_rolling_success')
         plt.close()
 
     if 'stay_on_rolling_success' in experiment_data.get('all', {}):
@@ -466,20 +546,24 @@ def plot_experiment_data(experiment_data, filename):
         plt.title('Stay vs. Rolling success')
         plt.xlabel('Rolling success')
         plt.ylabel('Probability to continue')
-        plt.tight_layout()
-        plt.savefig('{}_stay_on_rolling_success.png'.format(filename))
+        _savefig(filename, 'stay_on_rolling_success')
         plt.close()
 
     if 'attrition_bias' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 7.5, 5
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['attrition_bias'].items())):
-            plt.plot(range(0, len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i], marker=MARKERS[i])
-        plt.legend(loc=4, frameon=True)
+            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i], marker=MARKERS[i])
+            plt.fill_between(
+                range(len(data)),
+                map(lambda x: x['confidence_interval_min'], data),
+                map(lambda x: x['confidence_interval_max'], data),
+                color=COLORS[i], alpha=0.35
+            )
+        plt.legend(loc=3, frameon=True, ncol=2)
         plt.title('Attrition bias')
         plt.xlabel('Minimal number of test attempts')
-        plt.ylabel('First attempt success')
-        plt.tight_layout()
-        plt.savefig('{}_attrition_bias.png'.format(filename))
+        plt.ylabel('First attempt error')
+        _savefig(filename, 'attrition_bias')
         plt.close()
 
     plt.close()
@@ -493,7 +577,7 @@ def plot_experiment_data(experiment_data, filename):
             to_plot = zip(*sorted(data.items()))
             plt.plot(to_plot[0], to_plot[1], label=group_name)
         plt.legend(loc=1, frameon=True)
-        plt.savefig('{}_test_questions.svg'.format(filename))
+        _savefig(filename, 'test_questions')
         plt.close()
 
     if 'response_time_curve_all' in experiment_data.get('all', {}) and 'response_time_curve' in experiment_data.get('all', {}):
@@ -508,7 +592,7 @@ def plot_experiment_data(experiment_data, filename):
             plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
         plt.title('Filtered Users')
         plt.legend(loc=1, frameon=True)
-        plt.savefig('{}_response_time_all.svg'.format(filename))
+        _savefig(filename, 'response_time_all')
         plt.close()
 
     contexts_to_plot = sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:4]
@@ -517,32 +601,56 @@ def plot_experiment_data(experiment_data, filename):
         for i, (context, data) in enumerate(contexts_to_plot, start=1):
             plt.subplot(4, 2, 2 * i - 1)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all_reverse'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                plt.fill_between(
+                    range(len(group_data)),
+                    map(lambda x: x['confidence_interval_min'], group_data),
+                    map(lambda x: x['confidence_interval_max'], group_data),
+                    color=COLORS[j], alpha=0.35
+                )
             plt.title('{}, all'.format(context))
 
             plt.subplot(4, 2, 2 * i)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_reverse'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                plt.fill_between(
+                    range(len(group_data)),
+                    map(lambda x: x['confidence_interval_min'], group_data),
+                    map(lambda x: x['confidence_interval_max'], group_data),
+                    color=COLORS[j], alpha=0.35
+                )
             plt.title('{}, filtered'.format(context))
             if i == 1:
                 plt.legend(loc=4, frameon=True)
-        plt.savefig('{}_learning_curve_contexts_reverse.svg'.format(filename))
+        _savefig(filename, 'learning_curve_contexts_reverse')
         plt.close()
 
         rcParams['figure.figsize'] = 15, 20
         for i, (context, data) in enumerate(contexts_to_plot, start=1):
             plt.subplot(4, 2, 2 * i - 1)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                plt.fill_between(
+                    range(len(group_data)),
+                    map(lambda x: x['confidence_interval_min'], group_data),
+                    map(lambda x: x['confidence_interval_max'], group_data),
+                    color=COLORS[j], alpha=0.35
+                )
             plt.title('{}, all'.format(context))
 
             plt.subplot(4, 2, 2 * i)
             for j, (group_name, group_data) in enumerate(sorted(data['learning_curve'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j])
+                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                plt.fill_between(
+                    range(len(group_data)),
+                    map(lambda x: x['confidence_interval_min'], group_data),
+                    map(lambda x: x['confidence_interval_max'], group_data),
+                    color=COLORS[j], alpha=0.35
+                )
             plt.title('{}, filtered'.format(context))
             if i == 1:
                 plt.legend(loc=4, frameon=True)
-        plt.savefig('{}_learning_curve_contexts.svg'.format(filename))
+        _savefig(filename, 'learning_curve_contexts')
         plt.close()
 
         rcParams['figure.figsize'] = 15, 20
@@ -558,33 +666,62 @@ def plot_experiment_data(experiment_data, filename):
             plt.title('{}, filtered'.format(context))
             if i == 1:
                 plt.legend(loc=1, frameon=True)
-        plt.savefig('{}_response_time_curve_contexts.svg'.format(filename))
+        _savefig(filename, 'response_time_curve_contexts')
         plt.close()
 
     if 'learning_points' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 10, 10
+        rcParams['figure.figsize'] = 25, 25
+        groups = []
+
+        def _get_data(to_plot):
+            return numpy.array([map(lambda x: x if numpy.isfinite(x) else 0, zip(*sorted(xs.items()))[1]) for (_, xs) in sorted(to_plot.items())])
+
+        def _plot_learning_surface(ax, data, title, xticklabels, cmap=plt.cm.RdYlGn, vmin=0, vmax=1):
+            plt.title(title)
+            ax.set_xticks(numpy.arange(len(data)) + 0.5,  minor=False)
+            ax.set_xticklabels(map(_format_time, xticklabels),  minor=False, rotation=90)
+            pcolor = ax.pcolor(data, cmap=cmap, vmin=vmin, vmax=vmax)
+            plt.colorbar(pcolor)
+
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['learning_points'].items())):
             to_plot = defaultdict(lambda: {})
             for row in data:
                 to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
-            ax = plt.subplot(2, 2, i)
-            plt.title(group_name)
-            ax.set_xticks(numpy.arange(len(to_plot[0])) + 0.5,  minor=False)
-            ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
-            pcolor = ax.pcolor(numpy.array([zip(*xs.items())[1] for (_, xs) in sorted(to_plot.items())]), cmap=plt.cm.RdYlGn, vmin=0, vmax=1)
-            plt.colorbar(pcolor)
-        plt.tight_layout()
-        plt.savefig('{}_learning_points_all.png'.format(filename))
+            groups.append((group_name, to_plot))
+        for i, (group_name, to_plot) in enumerate(groups):
+            ax = plt.subplot(len(groups) + 1, len(groups) + 1, i + 2)
+            _plot_learning_surface(ax, _get_data(to_plot), group_name, sorted(to_plot[0]))
+            ax = plt.subplot(len(groups) + 1, len(groups) + 1, (len(groups) + 1) * (i + 1) + 1)
+            _plot_learning_surface(ax, _get_data(groups[i][1]), groups[i][0], sorted(to_plot[0]))
+            for j, (_, to_plot2) in enumerate(groups):
+                ax = plt.subplot(len(groups) + 1, len(groups) + 1, (len(groups) + 1) * (i + 1) + j + 2)
+                _plot_learning_surface(ax, _get_data(to_plot) - _get_data(to_plot2), '', sorted(to_plot[0]), cmap=plt.cm.RdYlGn, vmin=-0.2, vmax=0.2)
+
+        _savefig(filename, 'learning_points_all')
         plt.close()
 
-    if 'returning' in experiment_data.get('all', {}):
-        for g, data in experiment_data['all']['returning'].iteritems():
-            print g, data
+        rcParams['figure.figsize'] = 7.5, 5
+        for i, (group_name, to_plot) in enumerate(groups):
+            ax = plt.gca(projection='3d')
+            data = _get_data(to_plot)
+            xs = numpy.arange(len(data[0]))
+            ys = numpy.arange(len(data))
+            xs, ys = numpy.meshgrid(xs, ys)
+            surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.RdYlGn, linewidth=0, antialiased=False)
+            ax.set_zlim(0, 1)
+            plt.colorbar(surface)
+            ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
+            plt.title(group_name)
+            _savefig(filename, 'learning_surface_{}'.format(group_name))
+            plt.close()
+
 
 plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=100, contexts=False, keys=None
-#    filter_invalid_tests=True, filter_invalid_response_time=False
+    answer_limit=1, curve_length=10, progress_length=100, contexts=False,
+    keys=None, school=False
+    #keys=['learning_points']
+    #keys=['attrition_bias', 'learning_curve_all', 'learning_curve', 'learning_curve_all_reverse', 'learning_curve_reverse']
 ), 'random_random')

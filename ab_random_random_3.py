@@ -244,9 +244,9 @@ def progress(data, length=60):
     return result
 
 
-def learning_curve(data, length=10, user_length=None, context_answer_limit=100, reverse=False):
+def reference_series(data, length=10, context_answer_limit=100, reverse=False, user_length=None):
 
-    def _learning_curve(group):
+    def _context_series(group):
         if len(group) < context_answer_limit:
             return []
         user_answers_dict = defaultdict(list)
@@ -264,15 +264,18 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
             else:
                 return answers + nones
 
-        user_answers = [
+        return [
             _user_answers(answers)
             for answers in user_answers_dict.itervalues()
             if user_length is None or len(answers) >= user_length
         ]
+    return [val for (_, vals) in data.groupby(['context_name', 'term_type']).apply(_context_series).iteritems() for val in vals]
 
-        return map(lambda xs: filter(lambda x: x is not None, xs), zip(*user_answers))
-    context_curves_dict = {key: val for (key, val) in data.groupby(['context_name', 'term_type']).apply(_learning_curve).iteritems() if len(val) != 0}
-    all_curves = [reduce(lambda x, y: x + y, xs) for xs in zip(*context_curves_dict.values())]
+
+def learning_curve(data, length=10, user_length=None, context_answer_limit=100, reverse=False):
+    series = reference_series(data, length=length, user_length=user_length,
+        context_answer_limit=context_answer_limit, reverse=reverse)
+    references_by_attempt = map(lambda references: [r for r in references if r is not None], zip(*series))
 
     def _weighted_mean(xs):
         value, confidence = binomial_confidence_mean(xs)
@@ -282,7 +285,7 @@ def learning_curve(data, length=10, user_length=None, context_answer_limit=100, 
             'confidence_interval_max': confidence[1],
             'size': len(xs),
         }
-    return map(_weighted_mean, all_curves)
+    return map(_weighted_mean, references_by_attempt)
 
 
 def test_questions(data, length=100):

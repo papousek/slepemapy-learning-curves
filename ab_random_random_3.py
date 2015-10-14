@@ -549,9 +549,11 @@ def plot_experiment_data(experiment_data, filename):
         plt.subplot(121)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['progress'].items())):
             plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i])
+
         plt.legend(loc=1, frameon=True)
         plt.title('Stay curve')
         plt.xlabel('Number of attempts')
+        plt.ylabel('Percentage of users')
 
         plt.subplot(122)
         to_plot = zip(*sorted(experiment_data['all']['progress'].items()))
@@ -561,7 +563,6 @@ def plot_experiment_data(experiment_data, filename):
         errors = map(numpy.array, zip(*map(lambda d: [d['confidence_interval_min'], d['confidence_interval_max']], to_plot[1])))
         plt.ylim(0.6, 0.8)
         plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
-        plt.gca().yaxis.grid(True)
         plt.xticks(xs + 0.35, to_plot[0])
         plt.title('Users having at least 11 answers')
         plt.xlabel('Variant of algorithm for question construction')

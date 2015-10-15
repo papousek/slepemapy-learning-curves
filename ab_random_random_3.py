@@ -682,7 +682,7 @@ def plot_experiment_data(experiment_data, filename):
         sns.barplot(x='bin', y='hist', hue='condition', data=to_plot)
         plt.xticks(range(len(data['bins']) - 1), map(lambda x: '{} - {}'.format(int(100 * x), int(100 * (x + 0.1))), data['bins'][:-1]), rotation=30)
         plt.ylabel('Number of users')
-        plt.xlabel('Success (%)')
+        plt.xlabel('Error rate (%)')
         plt.legend(loc=1, frameon=True, ncol=2)
 
         plt.subplot(122)

@@ -812,6 +812,17 @@ def plot_experiment_data(experiment_data, filename):
             _savefig(filename, 'learning_surface_{}'.format(group_name))
             plt.close()
 
+    if 'contexts' in experiment_data:
+        contexts, answer_nums = zip(*sorted(map(lambda x: (x[0], x[1]['meta_all']['answers']), experiment_data['contexts'].iteritems()), key=lambda x: -x[1]))
+        contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts)
+        ax = plt.subplot(111)
+        plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]))
+        plt.title('Top 10 mostly practiced contexts')
+        plt.ylabel('Number of answers (%)')
+        ax.set_xticks(numpy.arange(len(answer_nums[:10])),  minor=False)
+        ax.set_xticklabels(contexts[:10],  minor=False, rotation=60)
+        _savefig(filename, 'context_answers')
+
     if 'learning_points_all' in experiment_data.get('all', {}):
         to_plot = defaultdict(lambda: {})
         for row in experiment_data['all']['learning_points_all']:

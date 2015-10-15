@@ -22,11 +22,9 @@ import scikits.bootstrap as bootstrap
 SNS_STYLE = {
     'style': 'whitegrid',
     'font_scale': 1.8,
-    'rc': {
-        'grid.linestyle': ':',
-    }
 }
 MARKER_SIZE = 10
+HATCHES=['//', '', '\\\\', '/', '\\', '.', '*', 'O', '-', '+', 'x', 'o']
 sns.set(**SNS_STYLE)
 
 
@@ -75,6 +73,14 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
             'confidence_interval_max': numpy.percentile(rs, 98),
         }
     return map(_aggr, confidence_vals)
+
+
+def _histogram(xs, bins=10):
+    hist, bins = numpy.histogram(xs, bins=bins)
+    return {
+        'hist': list(hist),
+        'bins': list(bins),
+    }
 
 
 def _format_time(seconds):
@@ -287,14 +293,17 @@ def progress(data, length=60):
     return result
 
 
-def reference_series(data, length=10, context_answer_limit=100, reverse=False, user_length=None):
+def reference_series(data, length=10, context_answer_limit=100, reverse=False, user_length=None, save_fun=None):
+
+    if save_fun is None:
+        save_fun = lambda row: row['item_asked_id'] != row['item_answered_id']
 
     def _context_series(group):
         if len(group) < context_answer_limit:
             return []
         user_answers_dict = defaultdict(list)
         for row in iterdicts(group):
-            user_answers_dict[row['user_id']].append(row['item_asked_id'] != row['item_answered_id'])
+            user_answers_dict[row['user_id']].append(save_fun(row))
 
         def _user_answers(answers):
             if reverse:
@@ -347,26 +356,19 @@ def test_questions(data, length=100):
     return dict(result.items())
 
 
-def response_time_curve(data, length=10, user_length=None, context_answer_limit=100):
+def response_time_curve(data, length=10, user_length=None, context_answer_limit=100, correctness=True, reverse=False):
 
-    def _response_time_curve(group):
-        if len(group) < context_answer_limit:
-            return []
-        user_answers_dict = defaultdict(list)
-        for row in iterdicts(group):
-            user_answers_dict[row['user_id']].append(row['response_time'])
-        user_answers = [
-            answers[:min(len(answers), length)] + [None for _ in range(length - min(len(answers), length))]
-            for answers in user_answers_dict.itervalues()
-            if user_length is None or len(answers) >= user_length
-        ]
-        return user_answers
+    series = reference_series(data, length=length, user_length=user_length,
+        context_answer_limit=context_answer_limit, reverse=reverse,
+        save_fun=lambda row: (row['response_time'] if correctness is None or (row['item_asked_id'] == row['item_answered_id']) == correctness else None))
+    references_by_attempt = map(lambda references: [r for r in references if r is not None], zip(*series))
 
-    all_answers = [ans for c_ans in data.groupby(['context_name', 'term_type']).apply(_response_time_curve).to_dict().values() for ans in c_ans]
     def _aggregate(xs):
         xs = filter(lambda x: x is not None, xs)
-        return numpy.median(xs)
-    return map(_aggregate, zip(*all_answers))
+        return {
+            'value': numpy.median(xs),
+        }
+    return map(_aggregate, references_by_attempt)
 
 
 def learning_points(data, length=5):
@@ -437,10 +439,16 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
         }
         if keys is None or 'learning_points' in keys:
             result['learning_points'] = groupped.apply(lambda g: learning_points(g, length=curve_length)).to_dict()
+        if keys is None or 'error_hist' in keys:
+            result['error_hist'] = groupped_all.apply(
+                lambda group: _histogram(group.groupby('user_id').apply(lambda g: (g['item_asked_id'] != g['item_answered_id']).mean()).to_dict().values(), bins=numpy.arange(0, 1.1, step=0.1))
+            ).to_dict()
         if keys is None or 'learning_points_all' in keys:
             result['learning_points_all'] = learning_points(data, length=curve_length)
         if keys is None or 'learning_curve_all' in keys:
             result['learning_curve_all'] = groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict()
+        if keys is None or 'learning_curve_global' in keys:
+            result['learning_curve_global'] = groupped_all.apply(lambda g: learning_curve(g, length=progress_length)).to_dict()
         if keys is None or 'learning_curve_fit_all' in keys:
             result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_all_reverse' in keys:
@@ -455,10 +463,16 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['learning_curve_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length, reverse=True)).to_dict()
         if keys is None or 'learning_curve_fit_reverse' in keys:
             result['learning_curve_fit_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
-        if keys is None or 'response_time_curve_all' in keys:
-            result['response_time_curve_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict()
-        if keys is None or 'response_time_curve' in keys:
-            result['response_time_curve'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length)).to_dict()
+        if keys is None or 'response_time_curve_correct_all' in keys:
+            result['response_time_curve_correct_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict()
+        if keys is None or 'response_time_curve_correct' in keys:
+            result['response_time_curve_correct'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length)).to_dict()
+        if keys is None or 'response_time_curve_wrong_all' in keys:
+            result['response_time_curve_wrong_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, correctness=False)).to_dict()
+        if keys is None or 'response_time_curve_wrong' in keys:
+            result['response_time_curve_wrong'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length, correctness=False)).to_dict()
+        if keys is None or 'response_time_curve_global' in keys:
+            result['response_time_curve_global'] = groupped_all.apply(lambda g: response_time_curve(g, length=progress_length, correctness=None)).to_dict()
         if keys is None or 'test_questions_hist' in keys:
             result['test_questions_hist'] = groupped_all.apply(lambda g: test_questions(g, length=progress_length)).to_dict()
         if keys is None or 'attrition_bias' in keys:
@@ -487,9 +501,12 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
-def plot_line(data, with_confidence=True):
+def plot_line(data, with_confidence=True, markevery=None):
+    kwargs = {}
+    if markevery is not None:
+        kwargs['markevery'] = markevery
     for i, (group_name, group_data) in enumerate(sorted(data.items())):
-        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE)
+        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE, **kwargs)
         if with_confidence:
             plt.fill_between(
                 range(len(group_data)),
@@ -634,19 +651,47 @@ def plot_experiment_data(experiment_data, filename):
         _savefig(filename, 'test_questions')
         plt.close()
 
-    if 'response_time_curve_all' in experiment_data.get('all', {}) and 'response_time_curve' in experiment_data.get('all', {}):
+    if 'response_time_curve_correct_all' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 5
+        plot_line(experiment_data['all']['response_time_curve_correct_all'], with_confidence=False)
+        plt.xlabel('Attempt')
+        plt.ylabel('Response time (ms)')
+        plt.title('All Users')
+        plt.legend(loc=1, frameon=True)
+        _savefig(filename, 'response_time_correct_all')
+        plt.close()
+
+    if 'response_time_curve_wrong_all' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 5
+        plot_line(experiment_data['all']['response_time_curve_wrong_all'], with_confidence=False)
+        plt.xlabel('Attempt')
+        plt.ylabel('Response time (ms)')
+        plt.title('All Users')
+        plt.legend(loc=1, frameon=True)
+        _savefig(filename, 'response_time_wrong_all')
+        plt.close()
+
+    if 'error_hist' in experiment_data.get('all', {}) and 'learning_curve_global' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve_all'].items())):
-            plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-        plt.title('All Users')
+        to_plot_list = []
+        for group_name, data in experiment_data['all']['error_hist'].iteritems():
+            for _bin, _hist in zip(data['bins'], data['hist']):
+                to_plot_list.append({'condition': group_name, 'bin': _bin, 'hist': _hist})
+        to_plot = pandas.DataFrame(to_plot_list)
+        sns.barplot(x='bin', y='hist', hue='condition', data=to_plot)
+        plt.xticks(range(len(data['bins']) - 1), map(lambda x: '{} - {}'.format(int(100 * x), int(100 * (x + 0.1))), data['bins'][:-1]), rotation=30)
+        plt.ylabel('Number of users')
+        plt.xlabel('Success (%)')
+        plt.legend(loc=1, frameon=True, ncol=2)
 
         plt.subplot(122)
-        for i, (group_name, data) in enumerate(sorted(experiment_data['all']['response_time_curve'].items())):
-            plt.plot(range(len(data)), data, label=group_name, marker=MARKERS[i])
-        plt.title('Filtered Users')
-        plt.legend(loc=1, frameon=True)
-        _savefig(filename, 'response_time_all')
+        ylim_learning_curve()
+        plot_line(experiment_data['all']['learning_curve_global'], markevery=5, with_confidence=False)
+        plt.legend(loc=1, frameon=True, ncol=2)
+        plt.ylabel('Error rate')
+        plt.xlabel('Attempt (all answers)')
+        _savefig(filename, 'success')
         plt.close()
 
     contexts_to_plot = sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:4]
@@ -772,31 +817,30 @@ def plot_experiment_data(experiment_data, filename):
     if 'learning_points_all' in experiment_data.get('all', {}):
         to_plot = defaultdict(lambda: {})
         for row in experiment_data['all']['learning_points_all']:
+            if row[0] == 0:
+                continue
             to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
         ax = plt.gca(projection='3d')
         data = _get_data(to_plot)
         xs = numpy.arange(len(data[0]))
-        ys = numpy.arange(len(data))
+        ys = numpy.arange(len(data)) + 1
         xs, ys = numpy.meshgrid(xs, ys)
         surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.RdYlGn, linewidth=0, antialiased=False)
         ax.set_zlim(0, 1)
         plt.colorbar(surface)
-        ax.set_xticklabels(map(_format_time, sorted(to_plot[0])),  minor=False, rotation=90)
+        ax.set_xticklabels(map(_format_time, sorted(to_plot[1].keys())),  minor=False, rotation=90)
         plt.title('Learning surface')
         ax.set_xlabel('\n\nTime')
         ax.set_ylabel('\nAttempt')
-        ax.set_zlabel('\nError rate')
+        ax.set_zlabel('\nSuccess rate')
         _savefig(filename, 'learning_surface_all'.format(group_name))
         plt.close()
-
-
-
 
 
 plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=100, contexts=False,
+    answer_limit=1, curve_length=10, progress_length=60, contexts=False,
     keys=None, bootstrap_samples=1000
 ), 'random_random')

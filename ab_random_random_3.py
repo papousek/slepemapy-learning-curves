@@ -447,22 +447,12 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['learning_points_all'] = learning_points(data, length=curve_length)
         if keys is None or 'learning_curve_all' in keys:
             result['learning_curve_all'] = groupped.apply(lambda g: learning_curve(g, length=curve_length)).to_dict()
-        if keys is None or 'learning_curve_global' in keys:
-            result['learning_curve_global'] = groupped_all.apply(lambda g: learning_curve(g, length=progress_length)).to_dict()
-        if keys is None or 'learning_curve_fit_all' in keys:
-            result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_all_reverse' in keys:
             result['learning_curve_all_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, reverse=True)).to_dict()
-        if keys is None or 'learning_curve_fit_all_reverse' in keys:
-            result['learning_curve_fit_all_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve' in keys:
             result['learning_curve'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length)).to_dict()
-        if keys is None or 'learning_curve_fit' in keys:
-            result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_reverse' in keys:
             result['learning_curve_reverse'] = groupped.apply(lambda g: learning_curve(g, length=curve_length, user_length=curve_length, reverse=True)).to_dict()
-        if keys is None or 'learning_curve_fit_reverse' in keys:
-            result['learning_curve_fit_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'response_time_curve_correct_all' in keys:
             result['response_time_curve_correct_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length)).to_dict()
         if keys is None or 'response_time_curve_correct' in keys:
@@ -471,14 +461,24 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['response_time_curve_wrong_all'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, correctness=False)).to_dict()
         if keys is None or 'response_time_curve_wrong' in keys:
             result['response_time_curve_wrong'] = groupped.apply(lambda g: response_time_curve(g, length=curve_length, user_length=curve_length, correctness=False)).to_dict()
-        if keys is None or 'response_time_curve_global' in keys:
-            result['response_time_curve_global'] = groupped_all.apply(lambda g: response_time_curve(g, length=progress_length, correctness=None)).to_dict()
         if keys is None or 'test_questions_hist' in keys:
             result['test_questions_hist'] = groupped_all.apply(lambda g: test_questions(g, length=progress_length)).to_dict()
         if keys is None or 'attrition_bias' in keys:
             result['attrition_bias'] = groupped.apply(lambda g: attrition_bias(g, curve_length)).to_dict()
 
         if extended:
+            if keys is None or 'response_time_curve_global' in keys:
+                result['response_time_curve_global'] = groupped_all.apply(lambda g: response_time_curve(g, length=progress_length, correctness=None)).to_dict()
+            if keys is None or 'learning_curve_global' in keys:
+                result['learning_curve_global'] = groupped_all.apply(lambda g: learning_curve(g, length=progress_length)).to_dict()
+            if keys is None or 'learning_curve_fit_all' in keys:
+                result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
+            if keys is None or 'learning_curve_fit_all_reverse' in keys:
+                result['learning_curve_fit_all_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
+            if keys is None or 'learning_curve_fit' in keys:
+                result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
+            if keys is None or 'learning_curve_fit_reverse' in keys:
+                result['learning_curve_fit_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
             if keys is None or 'progress' in keys:
                 result['progress'] = groupped_all.apply(lambda g: progress(g, length=progress_length)).to_dict()
             if keys is None or 'progress_milestones' in keys:
@@ -755,13 +755,11 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 15, 20
         for i, (context, data) in enumerate(contexts_to_plot, start=1):
             plt.subplot(4, 2, 2 * i - 1)
-            for j, (group_name, group_data) in enumerate(sorted(data['response_time_curve_all'].items())):
-                plt.plot(range(len(group_data)), group_data, label=group_name, marker=MARKERS[j])
+            plot_line(data['response_time_curve_correct_all'], with_confidence=False)
             plt.title('{}, all'.format(context))
 
             plt.subplot(4, 2, 2 * i)
-            for j, (group_name, group_data) in enumerate(sorted(data['response_time_curve'].items())):
-                plt.plot(range(len(group_data)), group_data, label=group_name, marker=MARKERS[j])
+            plot_line(data['response_time_curve_correct'], with_confidence=False)
             plt.title('{}, filtered'.format(context))
             if i == 1:
                 plt.legend(loc=1, frameon=True)
@@ -841,6 +839,6 @@ plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=60, contexts=False,
+    answer_limit=1, curve_length=10, progress_length=60, contexts=True,
     keys=None, bootstrap_samples=1000
 ), 'random_random')

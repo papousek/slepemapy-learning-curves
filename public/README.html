@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimal-ui">
+    <title>slepemapy.cz</title>
+    <link type="text/css" rel="stylesheet" href="assets/css/github-markdown.css">
+    <link type="text/css" rel="stylesheet" href="assets/css/pilcrow.css">
+    <link type="text/css" rel="stylesheet" href="assets/css/hljs-github.min.css"/>
+  </head>
+  <body>
+    <article class="markdown-body"><h1 id="slepemapy-cz"><a class="header-link" href="#slepemapy-cz"></a>slepemapy.cz</h1>
+<p>The data set is based on the online system <a href="http://slepemapy.cz">http://slepemapy.cz</a>. The system is
+available in Czech, English, German, and Spanish, most users are from Czech Republic
+(84 %) and Slovakia (8 %). The system uses adaptive algorithms for choosing
+questions, these algorithms are described in detail in [1] and [2].</p>
+<p>This is the first publicly available data set collected to evaluate the system,
+it is static and caputers users&#39; interactions from 25 August to 24 October</p>
+<ol class="list">
+<li><p>Results and description of studied conditions are available in [3].
+The basic statistics of the data set are as follows:</p>
+<ul class="list">
+<li>20,389 students;</li>
+<li>1,683 geographical items</li>
+<li>1,346,568 answers</li>
+</ul>
+</li>
+</ol>
+<h2 id="description"><a class="header-link" href="#description"></a>Description</h2>
+<p>The dataset contains 2 CSV files (commas are used as delimiter):</p>
+<ul class="list">
+<li>answers of users practicing location of places;</li>
+<li>users&#39; feedback about difficulty.</li>
+</ul>
+<h3 id="answers"><a class="header-link" href="#answers"></a>Answers</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">id</td>
+<td>answer identifier</td>
+</tr>
+<tr>
+<td style="text-align:center">user_id</td>
+<td>user&#39;s identifier</td>
+</tr>
+<tr>
+<td style="text-align:center">item_asked_id</td>
+<td>identifier of the asked place</td>
+</tr>
+<tr>
+<td style="text-align:center">term_asked_name</td>
+<td>name of the asked place</td>
+</tr>
+<tr>
+<td style="text-align:center">item_answered_id</td>
+<td>identifier of the answered place, empty if the user answered &quot;I don&#39;t know&quot;</td>
+</tr>
+<tr>
+<td style="text-align:center">term_asked_name</td>
+<td>name of the asked place</td>
+</tr>
+<tr>
+<td style="text-align:center">term_type</td>
+<td>type of the practiced place</td>
+</tr>
+<tr>
+<td style="text-align:center">context_name</td>
+<td>name of the practiced map (context)</td>
+</tr>
+<tr>
+<td style="text-align:center">direction</td>
+<td>type of the answer: (t2d) find the given place on the map; (d2t) pick the name for the highlighted place</td>
+</tr>
+<tr>
+<td style="text-align:center">options</td>
+<td>number of options (the asked place included)</td>
+</tr>
+<tr>
+<td style="text-align:center">time</td>
+<td>datetime when the answer was inserted to the system</td>
+</tr>
+<tr>
+<td style="text-align:center">response_time</td>
+<td>how much time the answer took (measured in milliseconds)</td>
+</tr>
+<tr>
+<td style="text-align:center">condition</td>
+<td>identifier of the studied condtion for which the asked question was constructed</td>
+</tr>
+<tr>
+<td style="text-align:center">ip_country</td>
+<td>country retrieved from the user’s IP address</td>
+</tr>
+<tr>
+<td style="text-align:center">ip_id</td>
+<td>meaningless identifier of the user’s IP address</td>
+</tr>
+</tbody>
+</table>
+<h3 id="feedback"><a class="header-link" href="#feedback"></a>Feedback</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">id</td>
+<td>identifier</td>
+</tr>
+<tr>
+<td style="text-align:center">user_id</td>
+<td>user&#39;s identifier</td>
+</tr>
+<tr>
+<td style="text-align:center">inserted</td>
+<td>datetime when the record was inserted to the system</td>
+</tr>
+<tr>
+<td style="text-align:center">value</td>
+<td>user&#39;s feedback about difficulty</td>
+</tr>
+</tbody>
+</table>
+<h2 id="ethical-and-privacy-considerations-"><a class="header-link" href="#ethical-and-privacy-considerations-"></a>Ethical and privacy considerations:</h2>
+<p>The used educational system is used mainly by students in schools or by
+students preparing for exams. Nevertheless, it is an open online system which
+can be used by anybody and details about individual users are not available.
+Users are identified only by their anonymous ID. Users can log into the system
+using their Google or Facebook accounts; but this login is used only for
+identifying the user within the system, it is not included in the data set.
+Unlogged users are tracked using web browser cookies. The system also logs IP
+address from which users access the system, the IP address is included in the
+data set in anonymized form. We separately encode the country of origin, which
+can be useful for analysis and its inclusion is not a privacy concern. The rest
+of the IP address is replaced by meaningless identifier to preserve privacy.</p>
+<h2 id="terms-of-use"><a class="header-link" href="#terms-of-use"></a>Terms of Use</h2>
+<p>The data set is available at <a href="http://www.fi.muni.cz/adaptivelearning/data/slepemapy/">http://www.fi.muni.cz/adaptivelearning/data/slepemapy/</a></p>
+<h3 id="license"><a class="header-link" href="#license"></a>License</h3>
+<p>This data set is made available under Open Database License whose full text can
+be found at <a href="http://opendatacommons.org/licenses/odbl/">http://opendatacommons.org/licenses/odbl/</a>. Any rights in individual
+contents of the database are licensed under the Database Contents License whose
+text can be found <a href="http://opendatacommons.org/licenses/dbcl/">http://opendatacommons.org/licenses/dbcl/</a></p>
+<h3 id="citation"><a class="header-link" href="#citation"></a>Citation</h3>
+<p>Please cite the following paper when you use our data set:</p>
+<pre class="hljs"><code>TODO</code></pre><h2 id="references"><a class="header-link" href="#references"></a>References</h2>
+<ul class="list">
+<li><strong>[1]</strong> Papoušek, J., Pelánek, R. &amp; Stanislav, V. Adaptive Practice of Facts in Domains with Varied Prior Knowledge. In Educational Data Mining, 2014.</li>
+<li><strong>[2]</strong> Papoušek, J., &amp; Pelánek, R. Impact of adaptive educational system behaviour on student motivation. In Artificial Intelligence in Education, 2015.</li>
+<li><strong>[3]</strong> TODO</li>
+</ul>
+    </article>
+  </body>
+</html>

@@ -110,9 +110,9 @@ def prepare_public_data(dest):
         os.makedirs(dest)
     answers = pa.get_raw_data('answers', load_data, 'experiment_cache', answer_limit=1)[[
         'id', 'time', 'response_time', 'item_answered_id', 'item_asked_id', 'user_id',
-        'guess', 'metainfo_id', 'direction', 'experiment_setup_name', 'context_name', 'term_type', 'session_id'
+        'guess', 'metainfo_id', 'direction', 'experiment_setup_name', 'context_name', 'session_id'
     ]]
-    flashcards = pandas.read_csv('./flashcards.csv', index_col=False)[['item_id', 'term_name']]
+    flashcards = pandas.read_csv('./flashcards.csv', index_col=False)
     feedback = pandas.read_csv('./ratings.csv', index_col=False)
     session_ip = pandas.read_csv('./ip_address.csv', index_col=False)[['sesion_id', 'ip_address']]
 
@@ -129,13 +129,27 @@ def prepare_public_data(dest):
     answers['options'] = answers['guess'].apply(lambda g: 0 if g == 0 else int(round(1 / g)))
     answers['reference'] = answers['metainfo_id'] == 1
     answers['condition'] = answers['experiment_setup_name']
-    answers = pandas.merge(answers, flashcards, left_on='item_asked_id', right_on='item_id', how='inner')
+    answers = pandas.merge(answers, flashcards[['item_id', 'term_name']], left_on='item_asked_id', right_on='item_id', how='inner')
     answers['term_asked_name'] = answers['term_name']
     del answers['term_name']
-    answers = pandas.merge(answers, flashcards, left_on='item_answered_id', right_on='item_id', how='inner')
+    answers = pandas.merge(answers, flashcards[['item_id', 'term_name']], left_on='item_answered_id', right_on='item_id', how='inner')
     answers['term_answered_name'] = answers['term_name']
     del answers['term_name']
 
+    term_type_trans = {
+        'region_cz': 'region',
+        'bundesland': 'region',
+        'region_it': 'region',
+        'autonomous_Comunity': 'region',
+        'province': 'region'
+    }
+
+    term_type_dict = flashcards.set_index('item_id')['term_type'].to_dict()
+    us_state_items = flashcards[(flashcards['context_name'] == 'United States') & (flashcards['term_type'] == 'state')]['item_id'].unique()
+    flashcards['term_type'] = flashcards['item_id'].apply(
+        lambda i: term_type_trans.get(term_type_dict[i], term_type_dict[i]) if i not in us_state_items else 'region'
+    )
+    answers = pandas.merge(answers, flashcards[['item_id', 'term_type']], left_on='item_asked_id', right_on='item_id', how='inner')
 
     answers = answers[[
         'id', 'time', 'response_time', 'item_answered_id', 'item_asked_id', 'user_id',

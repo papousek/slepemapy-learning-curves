@@ -1,22 +1,19 @@
 # works with:
 #   http://data-private.slepemapy.cz/ab-experiment-random-parts-3.zip
 
+import data as datalib
 import proso.analysis as pa
-import math
 import pandas
 import numpy
-from proso.geography.dfutil import iterdicts
 from collections import defaultdict
-from proso.metric import binomial_confidence_mean, confidence_median, confidence_value_to_json
+from proso.metric import binomial_confidence_mean
 import seaborn as sns
 import matplotlib.pyplot as plt
 from pylab import rcParams
 from scipy.optimize import curve_fit
-from scipy.stats import binom_test
-from matplotlib.colors import LinearSegmentedColormap
-from mpl_toolkits.mplot3d import Axes3D
 import os
 import scikits.bootstrap as bootstrap
+from proso.geography.dfutil import iterdicts
 
 
 SNS_STYLE = {
@@ -26,14 +23,6 @@ SNS_STYLE = {
 MARKER_SIZE = 10
 HATCHES=['//', '', '\\\\', '/', '\\', '.', '*', 'O', '-', '+', 'x', 'o']
 sns.set(**SNS_STYLE)
-
-
-SETUP = {
-    6: 'R-A',
-    7: 'R-R',
-    8: 'A-A',
-    9: 'A-R',
-}
 
 MARKERS = "dos^"
 COLORS = sns.color_palette()
@@ -109,92 +98,6 @@ def _savefig(basename, filename):
         os.makedirs(TARGET_DIR)
     plt.tight_layout()
     plt.savefig('{}/{}_{}.png'.format(TARGET_DIR, basename, filename))
-
-
-def decorate_school(answers, threshold_in_minutes=10, threshold_people=10, user_ip=None, time_column='time', user_column='user_id'):
-    user_first_answers = answers.drop_duplicates([user_column])[[user_column, time_column]].set_index(user_column)
-    user_last_answers = answers.drop_duplicates([user_column], take_last=True)[[user_column, time_column]].set_index(user_column)
-    user_first_last = user_first_answers.join(user_last_answers, how='right', lsuffix='_first', rsuffix='_last')
-
-    def _get_classrooms(column):
-        users = []
-        total = 0
-        classrooms = []
-        for user_id, time_diff in user_first_last.sort(column)[column].diff().iteritems():
-            time_diff = time_diff / numpy.timedelta64(1, 'm') if not isinstance(time_diff, pandas.tslib.NaTType) else 0
-            if time_diff and total + time_diff <= threshold_in_minutes:
-                users.append(user_id)
-                total += time_diff
-            else:
-                if len(users) > threshold_people:
-                    classrooms.append(set(users))
-                users = []
-                total = 0
-        return classrooms
-
-    classrooms_first = _get_classrooms(time_column + '_first')
-    classrooms_last = _get_classrooms(time_column + '_last')
-    classrooms = []
-    for c_first in classrooms_first:
-        for c_last in classrooms_last:
-            c_intersection = c_first & c_last
-            if len(c_intersection) > threshold_people:
-                classrooms.append(c_intersection)
-    classroom_users = [u for c in classrooms for u in c]
-
-    if user_ip is not None:
-        school_ips = map(lambda xs: xs[0], filter(lambda (i, n): n >= 10, user_ip.groupby('ip_address').apply(lambda us: len(us[user_column].unique())).to_dict().items()))
-        school_users = user_ip[user_ip['ip_address'].isin(school_ips)][user_column].unique()
-    else:
-        school_users = None
-    school_detected = answers[user_column].apply(lambda u: u in classroom_users or (school_users is not None and u in school_users))
-    if 'school' in answers:
-        answers['school'] = answers['school'] | school_detected
-    else:
-        answers['school'] = school_detected
-    return answers
-
-
-def load_data(answer_limit, filter_invalid_tests=True, filter_invalid_response_time=True, rolling_success=False):
-    answers = pandas.read_csv('./answers.csv', index_col=False, parse_dates=['time'])
-    flashcards = pandas.read_csv('./flashcards.csv', index_col=False)
-    user_ip = pandas.read_csv('./ip_address.csv', index_col=False)
-
-    answers['experiment_setup_name'] = answers['experiment_setup_id'].apply(lambda i: SETUP[i])
-
-    valid_users = map(lambda x: x[0], filter(lambda x: x[1] >= answer_limit, answers.groupby('user_id').apply(len).to_dict().items()))
-    answers = answers[answers['user_id'].isin(valid_users)]
-
-    if filter_invalid_response_time:
-        invalid_users = answers[answers['response_time'] < 0]['user_id'].unique()
-        answers = answers[~answers['user_id'].isin(invalid_users)]
-
-    answers = pandas.merge(answers, flashcards, on='item_id', how='inner')
-
-    if filter_invalid_tests:
-        invalid_users = answers[answers['context_id'] == 17]['user_id'].unique()
-        answers = answers[~answers['user_id'].isin(invalid_users)]
-
-        invalid_users = set()
-        last_user = None
-        last_context = None
-        counter = None
-        for row in iterdicts(answers.sort(['user_id', 'context_name', 'term_type', 'id'])):
-            if last_user != row['user_id'] or last_context != (row['context_name'], row['term_type']):
-                last_user = row['user_id']
-                last_context = (row['context_name'], row['term_type'])
-                counter = 0
-            if row['metainfo_id'] == 1 and counter % 10 != 0:
-                invalid_users.add(row['user_id'])
-            counter += 1
-        answers = answers[~answers['user_id'].isin(invalid_users)]
-
-    answers = pa.decorate_session_number(answers, 3600 * 10)
-    answers = decorate_school(answers, user_ip=user_ip)
-    if rolling_success:
-        answers = pa.decorate_last_in_session(answers)
-        answers = pa.decorate_rolling_success(answers)
-    return answers.sort(['user_id', 'id'])
 
 
 def milestone_progress(data, length, with_confidence=False):
@@ -410,7 +313,7 @@ def meta(data):
 
 def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=100):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
-    data = pa.get_raw_data('answers',  load_data, 'experiment_cache',
+    data = pa.get_raw_data('answers',  datalib.load_data, 'experiment_cache',
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
         filter_invalid_response_time=filter_invalid_response_time, rolling_success=compute_rolling_success
     )
@@ -501,12 +404,15 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
-def plot_line(data, with_confidence=True, markevery=None):
+def plot_line(data, with_confidence=True, markevery=None, invert=False):
     kwargs = {}
     if markevery is not None:
         kwargs['markevery'] = markevery
     for i, (group_name, group_data) in enumerate(sorted(data.items())):
-        plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE, **kwargs)
+        ys = numpy.array(map(lambda x: x['value'], group_data))
+        if invert:
+            ys = 1 - ys
+        plt.plot(range(len(group_data)), ys, label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE, **kwargs)
         if with_confidence:
             plt.fill_between(
                 range(len(group_data)),
@@ -580,6 +486,7 @@ def plot_experiment_data(experiment_data, filename):
         errors = map(numpy.array, zip(*map(lambda d: [d['confidence_interval_min'], d['confidence_interval_max']], to_plot[1])))
         plt.ylim(0.6, 0.8)
         plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
+        plt.gca().xaxis.grid(False)
         plt.xticks(xs + 0.35, to_plot[0])
         plt.title('Users having at least 11 answers')
         plt.xlabel('Variant of algorithm for question construction')
@@ -630,7 +537,7 @@ def plot_experiment_data(experiment_data, filename):
                 map(lambda x: x['confidence_interval_max'], data),
                 color=COLORS[i], alpha=0.35
             )
-        plt.legend(loc=3, frameon=True, ncol=2)
+        plt.legend(loc=2, frameon=True, ncol=2)
         plt.title('Attrition bias')
         plt.xlabel('Minimal number of test attempts')
         plt.ylabel('First attempt error')
@@ -683,7 +590,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.xticks(range(len(data['bins']) - 1), map(lambda x: '{} - {}'.format(int(100 * x), int(100 * (x + 0.1))), data['bins'][:-1]), rotation=30)
         plt.ylabel('Number of users')
         plt.xlabel('Error rate (%)')
-        plt.legend(loc=1, frameon=True, ncol=2)
+        plt.legend(loc=2, frameon=True, ncol=2)
 
         plt.subplot(122)
         ylim_learning_curve()
@@ -814,34 +721,45 @@ def plot_experiment_data(experiment_data, filename):
 
     if 'contexts' in experiment_data:
         contexts, answer_nums = zip(*sorted(map(lambda x: (x[0], x[1]['meta_all']['answers']), experiment_data['contexts'].iteritems()), key=lambda x: -x[1]))
-        contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts)
+        error = numpy.array(map(lambda c: experiment_data['contexts'][c]['learning_curve_all']['A-A'][0]['value'], contexts[:10]))
+        contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts[:10])
         ax = plt.subplot(111)
         plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]))
         plt.title('Top 10 mostly practiced contexts')
         plt.ylabel('Number of answers (%)')
         ax.set_xticks(numpy.arange(len(answer_nums[:10])),  minor=False)
         ax.set_xticklabels(contexts[:10],  minor=False, rotation=60)
+        ax2 = ax.twinx()
+        ax2.set_ylim(0, 1)
+        ax2.xaxis.grid(False)
+        ax2.set_ylabel('First attempt error', color=COLORS[2])
+        for tl in ax2.get_yticklabels():
+            tl.set_color(COLORS[2])
+        ax2.yaxis.grid(False)
+        ax2.scatter(numpy.arange(len(error)) + 0.4, error, color=COLORS[2], marker=MARKERS[2], s=10 * MARKER_SIZE)
         _savefig(filename, 'context_answers')
+        plt.close()
 
     if 'learning_points_all' in experiment_data.get('all', {}):
         to_plot = defaultdict(lambda: {})
         for row in experiment_data['all']['learning_points_all']:
             if row[0] == 0:
                 continue
-            to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else row[2]
+            to_plot[row[0]][row[1]] = numpy.nan if row[2] is None else 1 - row[2]
         ax = plt.gca(projection='3d')
         data = _get_data(to_plot)
-        xs = numpy.arange(len(data[0]))
-        ys = numpy.arange(len(data)) + 1
+        xs = numpy.arange(len(data[0]))[::-1]
+        ys = (numpy.arange(len(data)) + 1)[::-1]
         xs, ys = numpy.meshgrid(xs, ys)
-        surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.RdYlGn, linewidth=0, antialiased=False)
-        ax.set_zlim(0, 1)
+        surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.Blues, linewidth=0, antialiased=False)
+        ax.set_zlim(0, 0.5)
         plt.colorbar(surface)
-        ax.set_xticklabels(map(_format_time, sorted(to_plot[1].keys())),  minor=False, rotation=90)
+        ax.set_xticklabels(map(_format_time, sorted(to_plot[1].keys(), reverse=True)),  minor=False, rotation=90)
+        ax.set_yticklabels(numpy.arange(len(data[0]))[::-1], minor=False)
         plt.title('Learning surface')
         ax.set_xlabel('\n\nTime')
         ax.set_ylabel('\nAttempt')
-        ax.set_zlabel('\nSuccess rate')
+        ax.set_zlabel('\nError rate')
         _savefig(filename, 'learning_surface_all'.format(group_name))
         plt.close()
 

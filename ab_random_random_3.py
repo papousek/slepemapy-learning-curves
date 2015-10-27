@@ -11,9 +11,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from pylab import rcParams
 from scipy.optimize import curve_fit
+from scipy.stats import weibull_min
 import os
 import scikits.bootstrap as bootstrap
 from proso.geography.dfutil import iterdicts
+from matplotlib.colors import LinearSegmentedColormap
+from mpl_toolkits.mplot3d import Axes3D
 
 
 SNS_STYLE = {
@@ -43,7 +46,7 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
             _learn_fun,
             numpy.arange(len(learning_curve)),
             numpy.array(map(lambda x: x[0], learning_curve)),
-            sigma=numpy.array(map(lambda x: 1.0 / x[1], learning_curve))
+            sigma=numpy.array(map(lambda x: 1.0 / numpy.sqrt(x[1] + 1), learning_curve))
         )
         fit = map(lambda attempt: _learn_fun(attempt, opt[0], opt[1]), range(len(learning_curve)))
         for i, r in enumerate(fit):
@@ -52,16 +55,54 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
 
     series = reference_series(data, length=length, user_length=user_length,
         context_answer_limit=context_answer_limit, reverse=reverse)
+    try:
+        bootstrap.ci(series, _fit_learning_curve, method='pi', n_samples=bootstrap_samples)
 
-    bootstrap.ci(series, _fit_learning_curve, method='pi', n_samples=bootstrap_samples)
+        def _aggr(rs):
+            return {
+                'value': numpy.median(rs),
+                'confidence_interval_min': numpy.percentile(rs, 2),
+                'confidence_interval_max': numpy.percentile(rs, 98),
+            }
+        return map(_aggr, confidence_vals)
+    except:
+        return []
 
-    def _aggr(rs):
+
+def answers_density(data, length=10, context_answer_limit=100, trans_fun=None):
+    if trans_fun is None:
+        trans_fun = lambda x: x
+    nums = numpy.array(map(trans_fun,
+        data.groupby('user_id').apply(len).to_dict().values()
+    ))
+    available_values = sorted(list(set([trans_fun(i) for i in range(1, length + 1)])))
+    return [len([num for num in nums if num == i]) / float(len(nums)) for i in available_values]
+
+
+def fit_weibull(data, length=10, context_answer_limit=100, trans_fun=None):
+    if trans_fun is None:
+        trans_fun = lambda x: x
+    x = numpy.array(sorted(list(set([trans_fun(i) for i in numpy.arange(1, length + 1)]))))
+    confidence_vals = [[] for i in range(len(x))]
+    nums = numpy.array(map(trans_fun,
+        data.groupby('user_id').apply(len).to_dict().values()
+    ))
+
+    fit_values = weibull_min.fit(nums, floc=0)
+    fit = weibull_min.pdf(x, *fit_values)
+    for i, f in enumerate(fit):
+        confidence_vals[i] = f
+
+    def _aggr(r):
         return {
-            'value': numpy.median(rs),
-            'confidence_interval_min': numpy.percentile(rs, 2),
-            'confidence_interval_max': numpy.percentile(rs, 98),
+            'value': r,
+            'confidence_interval_min': r,
+            'confidence_interval_max': r,
         }
-    return map(_aggr, confidence_vals)
+    return {
+        'serie': map(_aggr, confidence_vals),
+        'params': list(fit_values),
+    }
 
 
 def _histogram(xs, bins=10):
@@ -196,7 +237,7 @@ def progress(data, length=60):
     return result
 
 
-def reference_series(data, length=10, context_answer_limit=100, reverse=False, user_length=None, save_fun=None):
+def reference_series(data, length=10, context_answer_limit=100, reverse=False, user_length=None, save_fun=None, require_length=True):
 
     if save_fun is None:
         save_fun = lambda row: row['item_asked_id'] != row['item_answered_id']
@@ -211,8 +252,11 @@ def reference_series(data, length=10, context_answer_limit=100, reverse=False, u
         def _user_answers(answers):
             if reverse:
                 answers = answers[::-1]
-            answers = answers[:min(len(answers), length)]
-            nones = [None for _ in range(length - len(answers))]
+            if require_length:
+                answers = answers[:min(len(answers), length)]
+                nones = [None for _ in range(length - len(answers))]
+            else:
+                nones = []
             if reverse:
                 answers = answers[::-1]
                 return nones + answers
@@ -311,7 +355,7 @@ def meta(data):
     }
 
 
-def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=100):
+def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=100, density_length=100):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
     data = pa.get_raw_data('answers',  datalib.load_data, 'experiment_cache',
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
@@ -368,18 +412,16 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['test_questions_hist'] = groupped_all.apply(lambda g: test_questions(g, length=progress_length)).to_dict()
         if keys is None or 'attrition_bias' in keys:
             result['attrition_bias'] = groupped.apply(lambda g: attrition_bias(g, curve_length)).to_dict()
+        if keys is None or 'learning_curve_fit_all' in keys:
+            result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
+        if keys is None or 'learning_curve_fit' in keys:
+            result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
 
         if extended:
             if keys is None or 'response_time_curve_global' in keys:
                 result['response_time_curve_global'] = groupped_all.apply(lambda g: response_time_curve(g, length=progress_length, correctness=None)).to_dict()
             if keys is None or 'learning_curve_global' in keys:
                 result['learning_curve_global'] = groupped_all.apply(lambda g: learning_curve(g, length=progress_length)).to_dict()
-            if keys is None or 'learning_curve_fit_all' in keys:
-                result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
-            if keys is None or 'learning_curve_fit_all_reverse' in keys:
-                result['learning_curve_fit_all_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
-            if keys is None or 'learning_curve_fit' in keys:
-                result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
             if keys is None or 'learning_curve_fit_reverse' in keys:
                 result['learning_curve_fit_reverse'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, reverse=True, bootstrap_samples=bootstrap_samples)).to_dict()
             if keys is None or 'progress' in keys:
@@ -392,6 +434,13 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
                 result['stay_on_rolling_success'] = groupped_all.apply(lambda g: stay_on_rolling_success(g)).to_dict()
             if keys is None or 'output_rolling_success' in keys:
                 result['output_rolling_success'] = groupped_all.apply(lambda g: output_rolling_success(g)).to_dict()
+
+            answer_density_trans = lambda x: (x - 1)/ 10 + 0.5
+
+            if keys is None or 'weibull' in keys:
+                result['weibull'] = groupped_all.apply(lambda g: fit_weibull(g, density_length, trans_fun=answer_density_trans)).to_dict()
+            if keys is None or 'answers_density' in keys:
+                result['answers_density'] = groupped_all.apply(lambda g: answers_density(g, density_length, trans_fun=answer_density_trans)).to_dict()
         return result
     result = {
         'all': _group_experiment_data(data, extended=True),
@@ -404,23 +453,28 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
-def plot_line(data, with_confidence=True, markevery=None, invert=False):
+def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=None, marker=True):
     kwargs = {}
     if markevery is not None:
         kwargs['markevery'] = markevery
     for i, (group_name, group_data) in enumerate(sorted(data.items())):
+        if setups is not None and group_name not in setups:
+            continue
+        group_kwargs = dict(kwargs)
+        if marker:
+            group_kwargs['marker'] = MARKERS[i]
         ys = numpy.array(map(lambda x: x['value'], group_data))
         if invert:
             ys = 1 - ys
-        plt.plot(range(len(group_data)), ys, label=group_name, marker=MARKERS[i], color=COLORS[i], markersize=MARKER_SIZE, **kwargs)
+        plt.plot(range(1, len(group_data) + 1), ys, label=group_name, color=COLORS[i], markersize=MARKER_SIZE, **group_kwargs)
         if with_confidence:
             plt.fill_between(
-                range(len(group_data)),
+                range(1, len(group_data) + 1),
                 map(lambda x: x['confidence_interval_min'], group_data),
                 map(lambda x: x['confidence_interval_max'], group_data),
                 color=COLORS[i], alpha=0.35
             )
-        plt.xlim(0, len(group_data) - 1)
+        plt.xlim(1, len(group_data))
 
 
 def ylim_learning_curve():
@@ -432,20 +486,20 @@ def plot_experiment_data(experiment_data, filename):
         rcParams['figure.figsize'] = 22.5, 10
         plt.subplot(231)
         ylim_learning_curve()
+        plt.title('All learners')
         plot_line(experiment_data['all']['learning_curve_all'])
-        plt.title('All users')
         plt.ylabel('Error rate')
         plt.legend(loc=1, frameon=True, ncol=2)
 
         plt.subplot(232)
         plot_line(experiment_data['all']['learning_curve'])
         ylim_learning_curve()
-        plt.title('Filtered users')
+        plt.title('Filtered learners')
 
         plt.subplot(233)
         plot_line(experiment_data['all']['learning_curve_reverse'])
         ylim_learning_curve()
-        plt.title('Filtered users, reverse')
+        plt.title('Filtered learners, reverse')
 
         plt.subplot(234)
         ylim_learning_curve()
@@ -467,31 +521,25 @@ def plot_experiment_data(experiment_data, filename):
         plt.close()
 
 
-    if 'progress' in experiment_data.get('all', {}):
+    if 'progress' in experiment_data.get('all', {}) and 'weibull' in experiment_data.get('all', {}) and 'answers_density' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 5
         plt.subplot(121)
         for i, (group_name, data) in enumerate(sorted(experiment_data['all']['progress'].items())):
-            plt.plot(range(len(data)), map(lambda x: x['value'], data), label=group_name, color=COLORS[i])
+            plt.plot(numpy.arange(len(data)) + 1, map(lambda x: x['value'], data), label=group_name, color=COLORS[i])
 
         plt.legend(loc=1, frameon=True)
-        plt.title('Stay curve')
         plt.xlabel('Number of attempts')
-        plt.ylabel('Percentage of users')
+        plt.ylabel('Proportion of learners')
 
         plt.subplot(122)
-        to_plot = zip(*sorted(experiment_data['all']['progress'].items()))
-        to_plot[1] = map(lambda x: x[10], to_plot[1])
-        xs = numpy.arange(len(to_plot[0]))
-        ys = map(lambda d: d['value'], to_plot[1])
-        errors = map(numpy.array, zip(*map(lambda d: [d['confidence_interval_min'], d['confidence_interval_max']], to_plot[1])))
-        plt.ylim(0.6, 0.8)
-        plt.bar(xs, ys, yerr=[ys - errors[0], errors[1] - ys], ecolor='black', error_kw={'linewidth': 4}, color=COLORS[:len(to_plot[0])])
-        plt.gca().xaxis.grid(False)
-        plt.xticks(xs + 0.35, to_plot[0])
-        plt.title('Users having at least 11 answers')
-        plt.xlabel('Variant of algorithm for question construction')
+        ys = map(lambda x: x['value'], experiment_data['all']['weibull']['A-A']['serie'])
+        plt.plot(numpy.arange(len(ys)) + 1, ys, '--', color='red', label='Weibull distribution')
+        plt.plot(numpy.arange(len(ys)) + 1, experiment_data['all']['answers_density'][group_name], color='black', label='Empirical distribution')
+        plt.xlabel('Number of initiated series (groups of 10 answers)')
+        plt.legend(loc=1, frameon=True)
         _savefig(filename, 'progress_all')
         plt.close()
+
 
     if 'progress_milestones' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 7.5, 5
@@ -563,7 +611,6 @@ def plot_experiment_data(experiment_data, filename):
         plot_line(experiment_data['all']['response_time_curve_correct_all'], with_confidence=False)
         plt.xlabel('Attempt')
         plt.ylabel('Response time (ms)')
-        plt.title('All Users')
         plt.legend(loc=1, frameon=True)
         _savefig(filename, 'response_time_correct_all')
         plt.close()
@@ -573,14 +620,14 @@ def plot_experiment_data(experiment_data, filename):
         plot_line(experiment_data['all']['response_time_curve_wrong_all'], with_confidence=False)
         plt.xlabel('Attempt')
         plt.ylabel('Response time (ms)')
-        plt.title('All Users')
+        plt.title('All Learners')
         plt.legend(loc=1, frameon=True)
         _savefig(filename, 'response_time_wrong_all')
         plt.close()
 
     if 'error_hist' in experiment_data.get('all', {}) and 'learning_curve_global' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 15, 5
-        plt.subplot(121)
+        rcParams['figure.figsize'] = 7.5, 10
+        plt.subplot(211)
         to_plot_list = []
         for group_name, data in experiment_data['all']['error_hist'].iteritems():
             for _bin, _hist in zip(data['bins'], data['hist']):
@@ -588,16 +635,16 @@ def plot_experiment_data(experiment_data, filename):
         to_plot = pandas.DataFrame(to_plot_list)
         sns.barplot(x='bin', y='hist', hue='condition', data=to_plot)
         plt.xticks(range(len(data['bins']) - 1), map(lambda x: '{} - {}'.format(int(100 * x), int(100 * (x + 0.1))), data['bins'][:-1]), rotation=30)
-        plt.ylabel('Number of users')
+        plt.ylabel('Number of learners')
         plt.xlabel('Error rate (%)')
-        plt.legend(loc=2, frameon=True, ncol=2)
+        plt.legend(loc=1, frameon=True, ncol=2)
 
-        plt.subplot(122)
+        plt.subplot(212)
         ylim_learning_curve()
         plot_line(experiment_data['all']['learning_curve_global'], markevery=5, with_confidence=False)
         plt.legend(loc=1, frameon=True, ncol=2)
         plt.ylabel('Error rate')
-        plt.xlabel('Attempt (all answers)')
+        plt.xlabel('Attempt')
         _savefig(filename, 'success')
         plt.close()
 
@@ -740,7 +787,33 @@ def plot_experiment_data(experiment_data, filename):
         _savefig(filename, 'context_answers')
         plt.close()
 
+        contexts_to_plot = ['Europe, state', 'Czech Rep., mountains', 'Czech Rep., city']
+        rcParams['figure.figsize'] = len(contexts_to_plot) * 7.5, 5
+        for i, context in enumerate(contexts_to_plot):
+            plt.subplot(1, len(contexts_to_plot), i + 1)
+            plot_line(experiment_data['contexts'][context]['learning_curve_all'], with_confidence=True)
+            plt.ylim(0, 1)
+            plt.title(context)
+            if i == 0:
+                plt.ylabel('All learners \nError rate')
+                plt.legend(loc=1, frameon=True)
+            plt.xlabel('Attempt')
+        _savefig(filename, 'context_comparison')
+        plt.close()
+
+    if 'weibull' in experiment_data.get('all', {}) and 'answers_density' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 15, 10
+        for i, (group_name, group_data) in enumerate(experiment_data['all']['weibull'].iteritems()):
+            plt.subplot(2, 2, i + 1)
+            ys = map(lambda x: x['value'], group_data['serie'])
+            plt.plot(numpy.arange(len(ys)) + 0.5, ys)
+            plt.plot(numpy.arange(len(ys)) + 0.5, experiment_data['all']['answers_density'][group_name], color='black')
+            plt.title(group_name)
+        _savefig(filename, 'weibull')
+        plt.close()
+
     if 'learning_points_all' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 5
         to_plot = defaultdict(lambda: {})
         for row in experiment_data['all']['learning_points_all']:
             if row[0] == 0:
@@ -751,11 +824,11 @@ def plot_experiment_data(experiment_data, filename):
         xs = numpy.arange(len(data[0]))[::-1]
         ys = (numpy.arange(len(data)) + 1)[::-1]
         xs, ys = numpy.meshgrid(xs, ys)
-        surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.Blues, linewidth=0, antialiased=False)
+        surface = ax.plot_surface(xs, ys, data, rstride=1, cstride=1, cmap=plt.cm.RdYlGn_r, linewidth=0, antialiased=False)
         ax.set_zlim(0, 0.5)
         plt.colorbar(surface)
         ax.set_xticklabels(map(_format_time, sorted(to_plot[1].keys(), reverse=True)),  minor=False, rotation=90)
-        ax.set_yticklabels(numpy.arange(len(data[0]))[::-1], minor=False)
+        ax.set_yticklabels(numpy.arange(len(data))[::-1] + 2, minor=False)
         plt.title('Learning surface')
         ax.set_xlabel('\n\nTime')
         ax.set_ylabel('\nAttempt')
@@ -768,6 +841,7 @@ plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=60, contexts=True,
+    answer_limit=1, curve_length=10, progress_length=60, density_length=300, contexts=True,
+    #filter_invalid_tests=False, filter_invalid_response_time=False,
     keys=None, bootstrap_samples=1000
 ), 'random_random')

@@ -69,26 +69,29 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
         return []
 
 
-def answers_density(data, length=10, context_answer_limit=100, trans_fun=None):
-    if trans_fun is None:
-        trans_fun = lambda x: x
+def answers_density(data, length=10):
+    trans_fun = lambda x: (x - 1) / 10 + 0.5
     nums = numpy.array(map(trans_fun,
         data.groupby('user_id').apply(len).to_dict().values()
     ))
     available_values = sorted(list(set([trans_fun(i) for i in range(1, length + 1)])))
+    print available_values
+    print sorted(list(set(nums))), len(nums)
     return [len([num for num in nums if num == i]) / float(len(nums)) for i in available_values]
 
 
-def fit_weibull(data, length=10, context_answer_limit=100, trans_fun=None):
-    if trans_fun is None:
-        trans_fun = lambda x: x
+def fit_weibull(data, length=10):
+    trans_fun = lambda x: (x - 1) / 10 + 0.5
     x = numpy.array(sorted(list(set([trans_fun(i) for i in numpy.arange(1, length + 1)]))))
     confidence_vals = [[] for i in range(len(x))]
-    nums = numpy.array(map(trans_fun,
-        data.groupby('user_id').apply(len).to_dict().values()
-    ))
+    nums = numpy.array(data.groupby('user_id').apply(len).to_dict().values())
+    nums_groupped = defaultdict(list)
+    for num in nums:
+        nums_groupped[(num - 1) / 10].append(num)
+    nums_avg = {key: numpy.mean(values) / 10.0 for (key, values) in nums_groupped.iteritems()}
+    nums_trans = [nums_avg[(num - 1) / 10] for num in nums]
 
-    fit_values = weibull_min.fit(nums, floc=0)
+    fit_values = weibull_min.fit(nums_trans, floc=0)
     fit = weibull_min.pdf(x, *fit_values)
     for i, f in enumerate(fit):
         confidence_vals[i] = f
@@ -138,7 +141,9 @@ def _savefig(basename, filename):
     if not os.path.exists(TARGET_DIR):
         os.makedirs(TARGET_DIR)
     plt.tight_layout()
-    plt.savefig('{}/{}_{}.png'.format(TARGET_DIR, basename, filename))
+    filename = '{}/{}_{}.png'.format(TARGET_DIR, basename, filename)
+    plt.savefig(filename)
+    print filename
 
 
 def milestone_progress(data, length, with_confidence=False):
@@ -435,12 +440,10 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             if keys is None or 'output_rolling_success' in keys:
                 result['output_rolling_success'] = groupped_all.apply(lambda g: output_rolling_success(g)).to_dict()
 
-            answer_density_trans = lambda x: (x - 1)/ 10 + 0.5
-
             if keys is None or 'weibull' in keys:
-                result['weibull'] = groupped_all.apply(lambda g: fit_weibull(g, density_length, trans_fun=answer_density_trans)).to_dict()
+                result['weibull'] = groupped_all.apply(lambda g: fit_weibull(g, density_length)).to_dict()
             if keys is None or 'answers_density' in keys:
-                result['answers_density'] = groupped_all.apply(lambda g: answers_density(g, density_length, trans_fun=answer_density_trans)).to_dict()
+                result['answers_density'] = groupped_all.apply(lambda g: answers_density(g, density_length)).to_dict()
         return result
     result = {
         'all': _group_experiment_data(data, extended=True),
@@ -539,6 +542,9 @@ def plot_experiment_data(experiment_data, filename):
         plt.legend(loc=1, frameon=True)
         _savefig(filename, 'progress_all')
         plt.close()
+
+        for group_name, group_data in sorted(experiment_data['all']['weibull'].items()):
+            print group_name, group_data['params']
 
 
     if 'progress_milestones' in experiment_data.get('all', {}):

@@ -29,6 +29,7 @@ sns.set(**SNS_STYLE)
 
 MARKERS = "dos^"
 COLORS = sns.color_palette()
+#TARGET_DIR = 'europe-state'
 TARGET_DIR = '.'
 
 
@@ -481,7 +482,7 @@ def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=N
 
 
 def ylim_learning_curve():
-    plt.ylim(0, 0.6)
+    plt.ylim(0, 0.8)
 
 
 def plot_experiment_data(experiment_data, filename):
@@ -535,7 +536,7 @@ def plot_experiment_data(experiment_data, filename):
         plt.ylabel('Proportion of learners')
 
         plt.subplot(122)
-        ys = map(lambda x: x['value'], experiment_data['all']['weibull']['A-A']['serie'])
+        ys = map(lambda x: x['value'], experiment_data['all']['weibull'][50]['serie'])
         plt.plot(numpy.arange(len(ys)) + 1, ys, '--', color='red', label='Weibull distribution')
         plt.plot(numpy.arange(len(ys)) + 1, experiment_data['all']['answers_density'][group_name], color='black', label='Empirical distribution')
         plt.xlabel('Number of initiated series (groups of 10 answers)')
@@ -774,7 +775,7 @@ def plot_experiment_data(experiment_data, filename):
 
     if 'contexts' in experiment_data:
         contexts, answer_nums = zip(*sorted(map(lambda x: (x[0], x[1]['meta_all']['answers']), experiment_data['contexts'].iteritems()), key=lambda x: -x[1]))
-        error = numpy.array(map(lambda c: experiment_data['contexts'][c]['learning_curve_all']['A-A'][0]['value'], contexts[:10]))
+        error = numpy.array(map(lambda c: experiment_data['contexts'][c]['learning_curve_all'][50][0]['value'], contexts[:10]))
         contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts[:10])
         ax = plt.subplot(111)
         plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]))
@@ -847,7 +848,9 @@ plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=60, density_length=300, contexts=True,
-    #filter_invalid_tests=False, filter_invalid_response_time=False,
-    keys=None, bootstrap_samples=1000
+    answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=False,
+    filter_invalid_tests=False, filter_invalid_response_time=False,
+    #context_name='Europe', term_type='state',
+    keys='attrition_bias'
+    #keys=['progress', 'weibull', 'answers_density'], bootstrap_samples=1000
 ), 'random_random')

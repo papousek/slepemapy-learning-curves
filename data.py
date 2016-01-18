@@ -22,6 +22,7 @@ def load_data(answer_limit, filter_invalid_tests=True, filter_invalid_response_t
     answers = pandas.read_csv('./answers.csv', index_col=False, parse_dates=['time'])
     flashcards = pandas.read_csv('./flashcards.csv', index_col=False)
     user_ip = pandas.read_csv('./ip_address.csv', index_col=False)
+    difficulty = pandas.read_csv('./difficulty.csv')
 
     answers['experiment_setup_name'] = answers['experiment_setup_id'].apply(lambda i: SETUP[i])
 
@@ -33,6 +34,7 @@ def load_data(answer_limit, filter_invalid_tests=True, filter_invalid_response_t
         answers = answers[~answers['user_id'].isin(invalid_users)]
 
     answers = pandas.merge(answers, flashcards, on='item_id', how='inner')
+    answers = pandas.merge(answers, difficulty, on='item_id', how='inner')
 
     if filter_invalid_tests:
         invalid_users = answers[answers['context_id'] == 17]['user_id'].unique()

@@ -17,18 +17,20 @@ import scikits.bootstrap as bootstrap
 from proso.geography.dfutil import iterdicts
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.mplot3d import Axes3D
+import math
 
 
 SNS_STYLE = {
-    'style': 'whitegrid',
+    'style': 'white',
     'font_scale': 1.8,
 }
 MARKER_SIZE = 10
 HATCHES=['//', '', '\\\\', '/', '\\', '.', '*', 'O', '-', '+', 'x', 'o']
+LINES=['-', '--', '-.', ':']
 sns.set(**SNS_STYLE)
 
 MARKERS = "dos^"
-COLORS = sns.color_palette()
+COLORS = sns.color_palette('gray')
 #TARGET_DIR = 'europe-state'
 TARGET_DIR = '.'
 
@@ -76,8 +78,6 @@ def answers_density(data, length=10):
         data.groupby('user_id').apply(len).to_dict().values()
     ))
     available_values = sorted(list(set([trans_fun(i) for i in range(1, length + 1)])))
-    print available_values
-    print sorted(list(set(nums))), len(nums)
     return [len([num for num in nums if num == i]) / float(len(nums)) for i in available_values]
 
 
@@ -115,6 +115,23 @@ def _histogram(xs, bins=10):
         'hist': list(hist),
         'bins': list(bins),
     }
+
+
+def _sigmoid(x):
+    return 1.0 / (1 + math.exp(-x))
+
+
+def _format_label(label, size=15):
+    try:
+        label = unicode(label)
+    except:
+        pass
+    if len(label) <= size:
+        return label
+    split_label = label.split(' ')
+    if len(split_label) == 1:
+        return split_label[:size]
+    return (' '.join([l[0] for l in split_label[:-1]]) + ' ' + split_label[-1])[:size]
 
 
 def _format_time(seconds):
@@ -223,6 +240,42 @@ def attrition_bias(data, length=6, context_answer_limit=100):
             'confidence_interval_max': confidence[1],
         })
     return result
+
+
+def item_occurences(group):
+
+    def _occurs(_group):
+        last_user = None
+        i = None
+        result = defaultdict(lambda: [[], 0, None])
+        for user_id, item_asked_id, difficulty, term_name in _group.drop_duplicates(['user_id', 'item_asked_id'])[['user_id', 'item_asked_id', 'difficulty', 'term_name']].values:
+            if last_user != user_id:
+                last_user = user_id
+                i = 0
+            else:
+                result[item_asked_id][0].append(i)
+                result[item_asked_id][1] = difficulty
+                result[item_asked_id][2] = term_name
+            i += 1
+        return result
+    int_result = group.groupby(['context_name', 'term_type']).apply(_occurs).to_dict()
+    return {i: {
+        'value': numpy.median(os[0]),
+        'difficulty': os[1],
+        'term_name': os[2],
+    } for data in int_result.itervalues() for (i, os) in data.iteritems()}
+
+
+def item_frequencies(group):
+    def _freq(_group):
+        total = float(len(_group))
+        return _group.groupby('item_asked_id').apply(lambda xs: (len(xs) / total, xs['difficulty'].values[0], xs['term_name'].values[0])).to_dict()
+    int_result = group.groupby(['context_name', 'term_type']).apply(_freq).to_dict()
+    return {i: {
+        'value': f[0],
+        'difficulty': f[1],
+        'term_name': f[2]
+    } for data in int_result.itervalues() for (i, f) in data.iteritems()}
 
 
 def progress(data, length=60):
@@ -422,6 +475,10 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['learning_curve_fit_all'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
         if keys is None or 'learning_curve_fit' in keys:
             result['learning_curve_fit'] = groupped.apply(lambda g: fit_learning_curve(g, length=curve_length, user_length=curve_length, bootstrap_samples=bootstrap_samples)).to_dict()
+        if keys is None or 'item_occurences' in keys:
+            result['item_occurences'] = groupped_all.apply(item_occurences).to_dict()
+        if keys is None or 'item_frequencies' in keys:
+            result['item_frequencies'] = groupped_all.apply(item_frequencies).to_dict()
 
         if extended:
             if keys is None or 'response_time_curve_global' in keys:
@@ -485,7 +542,7 @@ def ylim_learning_curve():
     plt.ylim(0, 0.8)
 
 
-def plot_experiment_data(experiment_data, filename):
+def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols=3):
     if {'learning_curve_all', 'learning_curve', 'learning_curve_reverse', 'learning_curve_fit_all', 'learning_curve_fit', 'learning_curve_fit_reverse'} <= set(experiment_data.get('all', {}).keys()):
         rcParams['figure.figsize'] = 22.5, 10
         plt.subplot(231)
@@ -655,77 +712,154 @@ def plot_experiment_data(experiment_data, filename):
         _savefig(filename, 'success')
         plt.close()
 
-    contexts_to_plot = sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:4]
-    if len(contexts_to_plot) == 4:
-        rcParams['figure.figsize'] = 15, 20
-        for i, (context, data) in enumerate(contexts_to_plot, start=1):
-            plt.subplot(4, 2, 2 * i - 1)
-            for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all_reverse'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                plt.fill_between(
-                    range(len(group_data)),
-                    map(lambda x: x['confidence_interval_min'], group_data),
-                    map(lambda x: x['confidence_interval_max'], group_data),
-                    color=COLORS[j], alpha=0.35
-                )
-            plt.title('{}, all'.format(context))
+    contexts_to_plot = zip(*sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:(context_cols * context_rows)])
+    contexts_to_plot[0] = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts_to_plot[0])
+    contexts_to_plot = zip(*contexts_to_plot)
+    if len(contexts_to_plot) == context_cols * context_rows:
+        if 'learning_curve_reverse' in experiment_data.get('all', {}) and 'learning_curve_all_reverse' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 15, 20
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(4, 2, 2 * i - 1)
+                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all_reverse'].items())):
+                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                    plt.fill_between(
+                        range(len(group_data)),
+                        map(lambda x: x['confidence_interval_min'], group_data),
+                        map(lambda x: x['confidence_interval_max'], group_data),
+                        color=COLORS[j], alpha=0.35
+                    )
+                plt.title('{}, all'.format(context))
 
-            plt.subplot(4, 2, 2 * i)
-            for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_reverse'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                plt.fill_between(
-                    range(len(group_data)),
-                    map(lambda x: x['confidence_interval_min'], group_data),
-                    map(lambda x: x['confidence_interval_max'], group_data),
-                    color=COLORS[j], alpha=0.35
-                )
-            plt.title('{}, filtered'.format(context))
-            if i == 1:
-                plt.legend(loc=4, frameon=True)
-        _savefig(filename, 'learning_curve_contexts_reverse')
-        plt.close()
+                plt.subplot(4, 2, 2 * i)
+                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_reverse'].items())):
+                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                    plt.fill_between(
+                        range(len(group_data)),
+                        map(lambda x: x['confidence_interval_min'], group_data),
+                        map(lambda x: x['confidence_interval_max'], group_data),
+                        color=COLORS[j], alpha=0.35
+                    )
+                plt.title('{}, filtered'.format(context))
+                if i == 1:
+                    plt.legend(loc=4, frameon=True)
+            _savefig(filename, 'learning_curve_contexts_reverse')
+            plt.close()
 
-        rcParams['figure.figsize'] = 15, 20
-        for i, (context, data) in enumerate(contexts_to_plot, start=1):
-            plt.subplot(4, 2, 2 * i - 1)
-            for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                plt.fill_between(
-                    range(len(group_data)),
-                    map(lambda x: x['confidence_interval_min'], group_data),
-                    map(lambda x: x['confidence_interval_max'], group_data),
-                    color=COLORS[j], alpha=0.35
-                )
-            plt.title('{}, all'.format(context))
+        if 'learning_curve' in experiment_data.get('all', {}) and 'learning_curve_all' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 15, 20
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(4, 2, 2 * i - 1)
+                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all'].items())):
+                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                    plt.fill_between(
+                        range(len(group_data)),
+                        map(lambda x: x['confidence_interval_min'], group_data),
+                        map(lambda x: x['confidence_interval_max'], group_data),
+                        color=COLORS[j], alpha=0.35
+                    )
+                plt.title('{}, all'.format(context))
 
-            plt.subplot(4, 2, 2 * i)
-            for j, (group_name, group_data) in enumerate(sorted(data['learning_curve'].items())):
-                plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                plt.fill_between(
-                    range(len(group_data)),
-                    map(lambda x: x['confidence_interval_min'], group_data),
-                    map(lambda x: x['confidence_interval_max'], group_data),
-                    color=COLORS[j], alpha=0.35
-                )
-            plt.title('{}, filtered'.format(context))
-            if i == 1:
-                plt.legend(loc=4, frameon=True)
-        _savefig(filename, 'learning_curve_contexts')
-        plt.close()
+                plt.subplot(4, 2, 2 * i)
+                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve'].items())):
+                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
+                    plt.fill_between(
+                        range(len(group_data)),
+                        map(lambda x: x['confidence_interval_min'], group_data),
+                        map(lambda x: x['confidence_interval_max'], group_data),
+                        color=COLORS[j], alpha=0.35
+                    )
+                plt.title('{}, filtered'.format(context))
+                if i == 1:
+                    plt.legend(loc=4, frameon=True)
+            _savefig(filename, 'learning_curve_contexts')
+            plt.close()
 
-        rcParams['figure.figsize'] = 15, 20
-        for i, (context, data) in enumerate(contexts_to_plot, start=1):
-            plt.subplot(4, 2, 2 * i - 1)
-            plot_line(data['response_time_curve_correct_all'], with_confidence=False)
-            plt.title('{}, all'.format(context))
+        if 'response_time_curve_correct' in experiment_data.get('all', {}) and 'response_time_curve_correct_all' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 15, 20
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(4, 2, 2 * i - 1)
+                plot_line(data['response_time_curve_correct_all'], with_confidence=False)
+                plt.title('{}, all'.format(context))
 
-            plt.subplot(4, 2, 2 * i)
-            plot_line(data['response_time_curve_correct'], with_confidence=False)
-            plt.title('{}, filtered'.format(context))
-            if i == 1:
-                plt.legend(loc=1, frameon=True)
-        _savefig(filename, 'response_time_curve_contexts')
-        plt.close()
+                plt.subplot(4, 2, 2 * i)
+                plot_line(data['response_time_curve_correct'], with_confidence=False)
+                plt.title('{}, filtered'.format(context))
+                if i == 1:
+                    plt.legend(loc=1, frameon=True)
+            _savefig(filename, 'response_time_curve_contexts')
+            plt.close()
+
+        if 'item_occurences' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(context_rows, context_cols, i)
+                for j, (group_name, group_data) in enumerate(sorted(data['item_occurences'].items())):
+                    plt.title('{}'.format(context))
+                    xs = range(len(group_data))
+                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: - x['difficulty']))
+                    plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, linestyle=LINES[j], marker=MARKERS[j], markevery=5)
+                    plt.xlim(0, len(group_data) - 1)
+                    if i > context_cols * (context_rows - 1):
+                        plt.xlabel('Items sorted by difficulty')
+                    if i % context_cols == 1:
+                        plt.ylabel('First occurence (median)')
+                if i == 1:
+                    plt.legend(loc=1, frameon=True)
+            _savefig(filename, 'item_occurences_order')
+            plt.close()
+
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(context_rows, context_cols, i)
+                for j, (group_name, group_data) in enumerate(sorted(data['item_occurences'].items())):
+                    plt.title('{}'.format(context))
+                    ys, xs = zip(*map(lambda x: (x['value'], _sigmoid(- x['difficulty'])), sorted(group_data.values(), key=lambda x: - x['difficulty'])))
+                    plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, linestyle=LINES[j], marker=MARKERS[j], markevery=5)
+                    plt.xlim(0, 1)
+                    if i > context_cols * (context_rows - 1):
+                        plt.xlabel('Items sorted by difficulty')
+                    if i % context_cols == 1:
+                        plt.ylabel('First occurence (median)')
+                if i == 1:
+                    plt.legend(loc=2, frameon=True)
+            _savefig(filename, 'item_occurences_difficulty')
+            plt.close()
+
+        if 'item_frequencies' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(context_rows, context_cols, i)
+                for j, (group_name, group_data) in enumerate(sorted(data['item_frequencies'].items())):
+                    plt.title('{}'.format(context))
+                    xs = range(len(group_data))
+                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: - x['difficulty']))
+                    plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, marker=MARKERS[j], linestyle=LINES[j], markevery=5)
+                    plt.xlim(0, len(group_data) - 1)
+                    if i > context_cols * (context_rows - 1):
+                        plt.xlabel('Items sorted by difficulty')
+                    if i % context_cols == 1:
+                        plt.ylabel('Frequency')
+                if i == 1:
+                    plt.legend(loc=1, frameon=True)
+            _savefig(filename, 'item_frequencies_order')
+            plt.close()
+
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                plt.subplot(context_rows, context_cols, i)
+                for j, (group_name, group_data) in enumerate(sorted(data['item_frequencies'].items())):
+                    plt.title('{}'.format(context))
+                    ys, xs = zip(*map(lambda x: (x['value'], _sigmoid(- x['difficulty'])), sorted(group_data.values(), key=lambda x: - x['difficulty'])))
+                    plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, marker=MARKERS[j], linestyle=LINES[j], markevery=5)
+                    plt.xlim(0, 1)
+                    if i > context_cols * (context_rows - 1):
+                        plt.xlabel('Items sorted by difficulty')
+                    if i % context_cols == 1:
+                        plt.ylabel('Frequency')
+                if i == 1:
+                    plt.legend(loc=2, frameon=True)
+            _savefig(filename, 'item_frequencies_difficulty')
+            plt.close()
 
     if 'learning_points' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 25, 25
@@ -773,7 +907,7 @@ def plot_experiment_data(experiment_data, filename):
             _savefig(filename, 'learning_surface_{}'.format(group_name))
             plt.close()
 
-    if 'contexts' in experiment_data:
+    if 'contexts' in experiment_data and 'learning_curve_all' in experiment_data.get('all', {}):
         contexts, answer_nums = zip(*sorted(map(lambda x: (x[0], x[1]['meta_all']['answers']), experiment_data['contexts'].iteritems()), key=lambda x: -x[1]))
         error = numpy.array(map(lambda c: experiment_data['contexts'][c]['learning_curve_all'][50][0]['value'], contexts[:10]))
         contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts[:10])
@@ -848,9 +982,9 @@ plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
     'experiment_cache', cached=True,
-    answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=False,
+    answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=True,
     filter_invalid_tests=False, filter_invalid_response_time=False,
     #context_name='Europe', term_type='state',
-    keys='attrition_bias'
+    keys=['item_frequencies', 'item_occurences']
     #keys=['progress', 'weibull', 'answers_density'], bootstrap_samples=1000
-), 'random_random')
+), 'target_difficulty')

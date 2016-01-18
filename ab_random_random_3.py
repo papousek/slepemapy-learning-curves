@@ -527,7 +527,7 @@ def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=N
         ys = numpy.array(map(lambda x: x['value'], group_data))
         if invert:
             ys = 1 - ys
-        plt.plot(range(1, len(group_data) + 1), ys, label=group_name, color=COLORS[i], markersize=MARKER_SIZE, **group_kwargs)
+        plt.plot(range(1, len(group_data) + 1), ys, label=group_name, color=COLORS[1], linestyle=LINES[i], markersize=MARKER_SIZE, **group_kwargs)
         if with_confidence:
             plt.fill_between(
                 range(1, len(group_data) + 1),
@@ -539,10 +539,10 @@ def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=N
 
 
 def ylim_learning_curve():
-    plt.ylim(0, 0.8)
+    plt.ylim(0, 0.6)
 
 
-def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols=3):
+def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols=3):
     if {'learning_curve_all', 'learning_curve', 'learning_curve_reverse', 'learning_curve_fit_all', 'learning_curve_fit', 'learning_curve_fit_reverse'} <= set(experiment_data.get('all', {}).keys()):
         rcParams['figure.figsize'] = 22.5, 10
         plt.subplot(231)
@@ -579,6 +579,22 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
         plt.xlabel('Attempt')
 
         _savefig(filename, 'learning_curve_combined')
+        plt.close()
+
+        rcParams['figure.figsize'] = 15, 5
+        plt.subplot(121)
+        ylim_learning_curve()
+        plt.title('Raw data')
+        plot_line(experiment_data['all']['learning_curve_all'])
+        plt.ylabel('Error rate')
+        plt.xlabel('Attempt')
+        plt.legend(loc=1, frameon=True, ncol=2)
+        plt.subplot(122)
+        ylim_learning_curve()
+        plt.title('Learning curve')
+        plot_line(experiment_data['all']['learning_curve_fit_all'])
+        plt.xlabel('Attempt')
+        _savefig(filename, 'learning_curve_combined_simple')
         plt.close()
 
 
@@ -651,7 +667,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
             )
         plt.legend(loc=2, frameon=True, ncol=2)
         plt.title('Attrition bias')
-        plt.xlabel('Minimal number of test attempts')
+        plt.xlabel('Minimal number of reference attempts')
         plt.ylabel('First attempt error')
         _savefig(filename, 'attrition_bias')
         plt.close()
@@ -746,31 +762,24 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
             plt.close()
 
         if 'learning_curve' in experiment_data.get('all', {}) and 'learning_curve_all' in experiment_data.get('all', {}):
-            rcParams['figure.figsize'] = 15, 20
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
             for i, (context, data) in enumerate(contexts_to_plot, start=1):
-                plt.subplot(4, 2, 2 * i - 1)
-                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve_all'].items())):
-                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                    plt.fill_between(
-                        range(len(group_data)),
-                        map(lambda x: x['confidence_interval_min'], group_data),
-                        map(lambda x: x['confidence_interval_max'], group_data),
-                        color=COLORS[j], alpha=0.35
-                    )
+                plt.subplot(context_rows, context_cols, i)
+                plot_line(data['learning_curve_fit_all'], with_confidence=False)
                 plt.title('{}, all'.format(context))
-
-                plt.subplot(4, 2, 2 * i)
-                for j, (group_name, group_data) in enumerate(sorted(data['learning_curve'].items())):
-                    plt.plot(range(len(group_data)), map(lambda x: x['value'], group_data), label=group_name, marker=MARKERS[j], color=COLORS[j])
-                    plt.fill_between(
-                        range(len(group_data)),
-                        map(lambda x: x['confidence_interval_min'], group_data),
-                        map(lambda x: x['confidence_interval_max'], group_data),
-                        color=COLORS[j], alpha=0.35
-                    )
-                plt.title('{}, filtered'.format(context))
+                plt.gca().spines['right'].set_visible(False)
+                plt.gca().spines['top'].set_visible(False)
+                plt.ylim(0, 0.8)
+                if i % context_cols != 1:
+                    plt.gca().yaxis.set_major_locator(plt.NullLocator())
+                else:
+                    plt.ylabel('Error rate')
+                if i <= context_cols * (context_rows - 1):
+                    plt.gca().xaxis.set_major_locator(plt.NullLocator())
+                else:
+                    plt.xlabel('Attempt')
                 if i == 1:
-                    plt.legend(loc=4, frameon=True)
+                    plt.legend(loc=1, frameon=True, ncol=2)
             _savefig(filename, 'learning_curve_contexts')
             plt.close()
 
@@ -792,11 +801,13 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
         if 'item_occurences' in experiment_data.get('all', {}):
             rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
             for i, (context, data) in enumerate(contexts_to_plot, start=1):
-                plt.subplot(context_rows, context_cols, i)
+                ax = plt.subplot(context_rows, context_cols, i)
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
                 for j, (group_name, group_data) in enumerate(sorted(data['item_occurences'].items())):
                     plt.title('{}'.format(context))
                     xs = range(len(group_data))
-                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: - x['difficulty']))
+                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: x['difficulty']))
                     plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, linestyle=LINES[j], marker=MARKERS[j], markevery=5)
                     plt.xlim(0, len(group_data) - 1)
                     if i > context_cols * (context_rows - 1):
@@ -804,13 +815,15 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
                     if i % context_cols == 1:
                         plt.ylabel('First occurence (median)')
                 if i == 1:
-                    plt.legend(loc=1, frameon=True)
+                    plt.legend(loc=9, frameon=True, ncol=2)
             _savefig(filename, 'item_occurences_order')
             plt.close()
 
             rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
             for i, (context, data) in enumerate(contexts_to_plot, start=1):
-                plt.subplot(context_rows, context_cols, i)
+                ax = plt.subplot(context_rows, context_cols, i)
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
                 for j, (group_name, group_data) in enumerate(sorted(data['item_occurences'].items())):
                     plt.title('{}'.format(context))
                     ys, xs = zip(*map(lambda x: (x['value'], _sigmoid(- x['difficulty'])), sorted(group_data.values(), key=lambda x: - x['difficulty'])))
@@ -821,18 +834,20 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
                     if i % context_cols == 1:
                         plt.ylabel('First occurence (median)')
                 if i == 1:
-                    plt.legend(loc=2, frameon=True)
+                    plt.legend(loc=2, frameon=True, ncol=2)
             _savefig(filename, 'item_occurences_difficulty')
             plt.close()
 
         if 'item_frequencies' in experiment_data.get('all', {}):
             rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
             for i, (context, data) in enumerate(contexts_to_plot, start=1):
-                plt.subplot(context_rows, context_cols, i)
+                ax = plt.subplot(context_rows, context_cols, i)
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
                 for j, (group_name, group_data) in enumerate(sorted(data['item_frequencies'].items())):
                     plt.title('{}'.format(context))
                     xs = range(len(group_data))
-                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: - x['difficulty']))
+                    ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: x['difficulty']))
                     plt.plot(xs, ys, label=group_name, color=COLORS[1], markersize=MARKER_SIZE, marker=MARKERS[j], linestyle=LINES[j], markevery=5)
                     plt.xlim(0, len(group_data) - 1)
                     if i > context_cols * (context_rows - 1):
@@ -840,13 +855,15 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
                     if i % context_cols == 1:
                         plt.ylabel('Frequency')
                 if i == 1:
-                    plt.legend(loc=1, frameon=True)
+                    plt.legend(loc=9, frameon=True, ncol=2)
             _savefig(filename, 'item_frequencies_order')
             plt.close()
 
             rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
             for i, (context, data) in enumerate(contexts_to_plot, start=1):
-                plt.subplot(context_rows, context_cols, i)
+                ax = plt.subplot(context_rows, context_cols, i)
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
                 for j, (group_name, group_data) in enumerate(sorted(data['item_frequencies'].items())):
                     plt.title('{}'.format(context))
                     ys, xs = zip(*map(lambda x: (x['value'], _sigmoid(- x['difficulty'])), sorted(group_data.values(), key=lambda x: - x['difficulty'])))
@@ -857,8 +874,25 @@ def plot_experiment_data(experiment_data, filename, context_rows=4, context_cols
                     if i % context_cols == 1:
                         plt.ylabel('Frequency')
                 if i == 1:
-                    plt.legend(loc=2, frameon=True)
+                    plt.legend(loc=2, frameon=True, ncol=2)
             _savefig(filename, 'item_frequencies_difficulty')
+            plt.close()
+
+        if 'attrition_bias' in experiment_data.get('all', {}):
+            rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+            for i, (context, data) in enumerate(contexts_to_plot, start=1):
+                ax = plt.subplot(context_rows, context_cols, i)
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
+                plot_line(data['attrition_bias'], with_confidence=False)
+                plt.title('{}'.format(context))
+                if i == 1:
+                    plt.legend(loc=2, frameon=True, ncol=2)
+                if i > context_cols * (context_rows - 1):
+                    plt.xlabel('Minimal number of reference attempts')
+                if i % context_cols == 1:
+                    plt.ylabel('First attempt error')
+            _savefig(filename, 'attrition_bias_contexts')
             plt.close()
 
     if 'learning_points' in experiment_data.get('all', {}):
@@ -985,6 +1019,11 @@ plot_experiment_data(pa.get_experiment_data(
     answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=True,
     filter_invalid_tests=False, filter_invalid_response_time=False,
     #context_name='Europe', term_type='state',
-    keys=['item_frequencies', 'item_occurences']
+    keys=[
+        'item_occurences', 'learning_points', 'learning_points_all',
+        'learning_curve', 'learning_curve_fit', 'learning_curve_all',
+        'learning_curve_fit_all', 'learning_curve_reverse',
+        'learning_curve_fit_reverse', 'attrition_bias'
+    ]
     #keys=['progress', 'weibull', 'answers_density'], bootstrap_samples=1000
 ), 'target_difficulty')

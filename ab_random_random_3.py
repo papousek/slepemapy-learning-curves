@@ -25,7 +25,8 @@ SNS_STYLE = {
     'font_scale': 1.8,
 }
 MARKER_SIZE = 10
-HATCHES=['//', '', '\\\\', '/', '\\', '.', '*', 'O', '-', '+', 'x', 'o']
+#HATCHES=['//', '', '\\\\', '/', '\\', '.', '*', 'O', '-', '+', 'x', 'o']
+HATCHES=[''] * 10
 LINES=['-', '--', '-.', ':']
 sns.set(**SNS_STYLE)
 
@@ -49,14 +50,14 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
             _learn_fun,
             numpy.arange(len(learning_curve)),
             numpy.array(map(lambda x: x[0], learning_curve)),
-            sigma=numpy.array(map(lambda x: 1.0 / numpy.sqrt(x[1] + 1), learning_curve))
+            sigma=numpy.array(map(lambda x: numpy.sqrt((x[0] * (1 - x[0])) / x[1]), learning_curve))
         )
-        fit = map(lambda attempt: _learn_fun(attempt, opt[0], opt[1]), range(len(learning_curve)))
+        fit = map(lambda attempt: _learn_fun(attempt, opt[0], opt[1]), range(length))
         for i, r in enumerate(fit):
             confidence_vals[i].append(r)
         return fit[-1]
 
-    series = reference_series(data, length=length, user_length=user_length,
+    series = reference_series(data, length=length * 2, user_length=user_length,
         context_answer_limit=context_answer_limit, reverse=reverse)
     try:
         bootstrap.ci(series, _fit_learning_curve, method='pi', n_samples=bootstrap_samples)
@@ -64,8 +65,8 @@ def fit_learning_curve(data, length=10, user_length=None, context_answer_limit=1
         def _aggr(rs):
             return {
                 'value': numpy.median(rs),
-                'confidence_interval_min': numpy.percentile(rs, 2),
-                'confidence_interval_max': numpy.percentile(rs, 98),
+                'confidence_interval_min': numpy.percentile(rs, 2.5),
+                'confidence_interval_max': numpy.percentile(rs, 97.5),
             }
         return map(_aggr, confidence_vals)
     except:
@@ -119,6 +120,10 @@ def _histogram(xs, bins=10):
 
 def _sigmoid(x):
     return 1.0 / (1 + math.exp(-x))
+
+
+def _format_context(context_name):
+    return context_name.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region')
 
 
 def _format_label(label, size=15):
@@ -180,6 +185,17 @@ def milestone_progress(data, length, with_confidence=False):
     for i in range(10, 10 * length + 1, 10):
         result.append(_progress_confidence(i))
     return result
+
+
+def practice_error(data):
+    data = data[data['metainfo_id'] != 1]
+    value, confidence = binomial_confidence_mean(data['item_asked_id'] != data['item_answered_id'])
+    return {
+        'value': value,
+        'confidence_interval_min': confidence[0],
+        'confidence_interval_max': confidence[1],
+        'size': len(data),
+    }
 
 
 def returning(data):
@@ -330,6 +346,70 @@ def reference_series(data, length=10, context_answer_limit=100, reverse=False, u
     return [val for (_, vals) in data.groupby(['context_name', 'term_type']).apply(_context_series).iteritems() for val in vals]
 
 
+def learning_slope(data, length=10, user_length=None, context_answer_limit=100, bootstrap_samples=100):
+    if len(data) < 100:
+        return {
+            'value': None,
+            'confidence_interval_min': None,
+            'confidence_interval_max': None,
+        }
+
+    def _fit_learning_curve(series):
+        references_by_attempt = map(lambda references: [r for r in references if r is not None], zip(*series))
+        norm_mean = numpy.mean(references_by_attempt[0])
+        learning_curve = map(lambda xs: (numpy.mean(xs) / norm_mean, len(xs)), references_by_attempt)
+
+        def _learn_fun(attempt, k):
+            return 1.0 / (attempt + 1) ** k
+
+        opt, _ = curve_fit(
+            _learn_fun,
+            numpy.arange(len(learning_curve)),
+            numpy.array(map(lambda x: x[0], learning_curve)),
+            sigma=numpy.array(map(lambda x: 1.0 / numpy.sqrt(x[1] + 1), learning_curve))
+        )
+        return opt[0]
+
+    series = reference_series(data, length=length * 2, user_length=user_length,
+        context_answer_limit=context_answer_limit)
+    confidence = bootstrap.ci(series, _fit_learning_curve, method='pi', n_samples=bootstrap_samples)
+
+    return {
+        'value': _fit_learning_curve(series),
+        'confidence_interval_min': confidence[0],
+        'confidence_interval_max': confidence[1],
+    }
+
+
+def learning_gain(data, length=10, user_length=None, context_answer_limit=100, bootstrap_samples=100):
+    if len(data) < 100:
+        return {
+            'value': None,
+            'confidence_interval_min': None,
+            'confidence_interval_max': None,
+        }
+    if user_length is None:
+        user_length = 2
+    half = max(1, user_length / 2)
+    series = reference_series(data, length=length, user_length=user_length,
+        context_answer_limit=context_answer_limit, require_length=False)
+    pre_post = map(lambda serie: (serie[:half], serie[half:]), series)
+
+    def _gain(data):
+        pre, post = zip(*data)
+        pre_mean = numpy.mean([x for xs in pre for x in xs])
+        post_mean = numpy.mean([x for xs in post for x in xs])
+        return (pre_mean - post_mean) / pre_mean
+
+    confidence = bootstrap.ci(pre_post, _gain, method='pi', n_samples=bootstrap_samples)
+
+    return {
+        'value': _gain(pre_post),
+        'confidence_interval_min': confidence[0],
+        'confidence_interval_max': confidence[1],
+    }
+
+
 def learning_curve(data, length=10, user_length=None, context_answer_limit=100, reverse=False):
     series = reference_series(data, length=length, user_length=user_length,
         context_answer_limit=context_answer_limit, reverse=reverse)
@@ -414,7 +494,7 @@ def meta(data):
     }
 
 
-def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=100, density_length=100):
+def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=200, density_length=100):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
     data = pa.get_raw_data('answers',  datalib.load_data, 'experiment_cache',
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
@@ -479,6 +559,12 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
             result['item_occurences'] = groupped_all.apply(item_occurences).to_dict()
         if keys is None or 'item_frequencies' in keys:
             result['item_frequencies'] = groupped_all.apply(item_frequencies).to_dict()
+        if keys is None or 'practice_error' in keys:
+            result['practice_error'] = groupped_all.apply(practice_error).to_dict()
+        if keys is None or 'learning_gain' in keys:
+            result['learning_gain'] = groupped.apply(lambda g: learning_gain(g, bootstrap_samples=bootstrap_samples)).to_dict()
+        if keys is None or 'learning_slope' in keys:
+            result['learning_slope'] = groupped.apply(lambda g: learning_slope(g, bootstrap_samples=bootstrap_samples)).to_dict()
 
         if extended:
             if keys is None or 'response_time_curve_global' in keys:
@@ -514,11 +600,17 @@ def compute_experiment_data(term_type=None, term_name=None, context_name=None, a
     return result
 
 
-def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=None, marker=True):
+def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=None, marker=True, xs=None, ax=None):
     kwargs = {}
+    if ax is None:
+        ax = plt.gca()
     if markevery is not None:
         kwargs['markevery'] = markevery
     for i, (group_name, group_data) in enumerate(sorted(data.items())):
+        if xs is None:
+            group_xs = numpy.arange(1, len(group_data) + 1)
+        else:
+            group_xs = xs
         if setups is not None and group_name not in setups:
             continue
         group_kwargs = dict(kwargs)
@@ -527,15 +619,15 @@ def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=N
         ys = numpy.array(map(lambda x: x['value'], group_data))
         if invert:
             ys = 1 - ys
-        plt.plot(range(1, len(group_data) + 1), ys, label=group_name, color=COLORS[1], linestyle=LINES[i], markersize=MARKER_SIZE, **group_kwargs)
+        ax.plot(group_xs, ys, label=group_name, color=COLORS[1], linestyle=LINES[i], markersize=MARKER_SIZE, **group_kwargs)
         if with_confidence:
             plt.fill_between(
-                range(1, len(group_data) + 1),
+                group_xs,
                 map(lambda x: x['confidence_interval_min'], group_data),
                 map(lambda x: x['confidence_interval_max'], group_data),
                 color=COLORS[i], alpha=0.35
             )
-        plt.xlim(1, len(group_data))
+        ax.set_xlim(min(group_xs), max(group_xs))
 
 
 def ylim_learning_curve():
@@ -729,7 +821,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
         plt.close()
 
     contexts_to_plot = zip(*sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:(context_cols * context_rows)])
-    contexts_to_plot[0] = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts_to_plot[0])
+    contexts_to_plot[0] = map(_format_context, contexts_to_plot[0])
     contexts_to_plot = zip(*contexts_to_plot)
     if len(contexts_to_plot) == context_cols * context_rows:
         if 'learning_curve_reverse' in experiment_data.get('all', {}) and 'learning_curve_all_reverse' in experiment_data.get('all', {}):
@@ -944,7 +1036,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
     if 'contexts' in experiment_data and 'learning_curve_all' in experiment_data.get('all', {}):
         contexts, answer_nums = zip(*sorted(map(lambda x: (x[0], x[1]['meta_all']['answers']), experiment_data['contexts'].iteritems()), key=lambda x: -x[1]))
         error = numpy.array(map(lambda c: experiment_data['contexts'][c]['learning_curve_all'][50][0]['value'], contexts[:10]))
-        contexts = map(lambda c: c.replace('Czech Rep.', 'CZ').replace('United States', 'US').replace('region_cz', 'region'), contexts[:10])
+        contexts = map(_format_context, contexts[:10])
         ax = plt.subplot(111)
         plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]))
         plt.title('Top 10 mostly practiced contexts')
@@ -975,6 +1067,112 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
             plt.xlabel('Attempt')
         _savefig(filename, 'context_comparison')
         plt.close()
+
+    if 'contexts' in experiment_data and 'practice_error' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5, 6
+        contexts, answer_nums, practice_error = zip(*sorted(map(
+            lambda x: (x[0], x[1]['meta_all']['answers'], x[1]['practice_error']),
+            experiment_data['contexts'].iteritems()
+        ), key=lambda x: -x[1]))
+        practice_error_plot = defaultdict(list)
+        for x in practice_error:
+            for key, val in x.iteritems():
+                if len(practice_error_plot[key]) < 10:
+                    practice_error_plot[key].append(val)
+        contexts = map(_format_context, contexts[:10])
+        ax = plt.subplot(111)
+        plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]), color=COLORS[5])
+        plt.title('Top 10 mostly practiced contexts')
+        ax.set_xticks(numpy.arange(len(answer_nums[:10])),  minor=False)
+        ax.set_xticklabels(contexts[:10],  minor=False, rotation=60)
+        ax.set_ylim(0, 20)
+        ax2 = ax.twinx()
+        ax2.set_ylim(0, 0.7)
+        ax2.xaxis.grid(False)
+        ax2.set_ylabel('Error rate\n(without reference answers)')
+        ax.set_ylabel('Number of answers (%)', color=COLORS[2])
+        for tl in ax.get_yticklabels():
+            tl.set_color(COLORS[2])
+        ax2.yaxis.grid(False)
+        plot_line(practice_error_plot, xs=numpy.arange(10) + 0.4, with_confidence=False, ax=ax2)
+        ax2.legend(loc=1, frameon=True, ncol=2)
+        plt.xlim(0, 10)
+        _savefig(filename, 'context_practice_error')
+        plt.close()
+
+    if 'contexts' in experiment_data and 'learning_gain' in experiment_data.get('all', {}):
+        contexts_to_plot = zip(*sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:10])
+        contexts_to_plot[0] = map(_format_context, contexts_to_plot[0])
+        context_order = dict(zip(contexts_to_plot[0], range(len(contexts_to_plot[0]))))
+        contexts_to_plot = zip(*contexts_to_plot)
+        to_plot = defaultdict(lambda: dict())
+        for context, data in contexts_to_plot:
+            for group_name, group_data in data['learning_gain'].iteritems():
+                to_plot[group_name][context] = group_data
+
+        ax = plt.gca()
+        for i, (group_name, group_data) in enumerate(sorted(to_plot.items())):
+            contexts, values = zip(*sorted(group_data.items(), key=lambda x: context_order[x[0]]))
+            confidence_vals = map(lambda x: (x['value'] - x['confidence_interval_min'], x['confidence_interval_max'] - x['value']), values)
+            values = map(lambda x: x['value'], values)
+            ax.bar(
+                numpy.arange(len(group_data)) + i * 0.2,
+                values, 0.2,
+                yerr=zip(*confidence_vals), error_kw={'ecolor': 'black'},
+                color=COLORS[i + 2], hatch=HATCHES[i], label=group_name,
+            )
+            ax.set_xticks(numpy.arange(len(group_data)) + 0.4)
+            ax.set_xticklabels(contexts, minor=False, rotation=60)
+            ax.set_ylabel('Learning gain')
+        ax.legend(loc=3, frameon=True, ncol=2)
+        _savefig(filename, 'context_learning_gain')
+        plt.close()
+
+    if 'contexts' in experiment_data and 'learning_slope' in experiment_data.get('all', {}):
+        contexts_to_plot = zip(*sorted(experiment_data.get('contexts', {}).items(), key=lambda (_, val): -val['meta_all']['answers'])[:10])
+        contexts_to_plot[0] = map(_format_context, contexts_to_plot[0])
+        context_order = dict(zip(contexts_to_plot[0], range(len(contexts_to_plot[0]))))
+        contexts_to_plot = zip(*contexts_to_plot)
+        to_plot = defaultdict(lambda: dict())
+        for context, data in contexts_to_plot:
+            for group_name, group_data in data['learning_slope'].iteritems():
+                to_plot[group_name][context] = group_data
+
+        ax = plt.gca()
+        for i, (group_name, group_data) in enumerate(sorted(to_plot.items())):
+            contexts, values = zip(*sorted(group_data.items(), key=lambda x: context_order[x[0]]))
+            confidence_vals = map(lambda x: (x['value'] - x['confidence_interval_min'], x['confidence_interval_max'] - x['value']), values)
+            values = map(lambda x: x['value'], values)
+            ax.bar(
+                numpy.arange(len(group_data)) + i * 0.2,
+                values, 0.2,
+                yerr=zip(*confidence_vals), error_kw={'ecolor': 'black'},
+                color=COLORS[i + 2], hatch=HATCHES[i], label=group_name,
+            )
+            ax.set_xticks(numpy.arange(len(group_data)) + 0.4)
+            ax.set_xticklabels(contexts, minor=False, rotation=60)
+            ax.set_ylabel('Learning slope')
+        ax.legend(loc=0, frameon=True, ncol=2)
+        _savefig(filename, 'context_learning_slope')
+        plt.close()
+
+    if 'contexts' in experiment_data and 'attrition_bias' in experiment_data.get('all', {}):
+        rcParams['figure.figsize'] = 7.5 * context_cols, 5 * context_rows
+        for i, (context, data) in enumerate(contexts_to_plot, start=1):
+            ax = plt.subplot(context_rows, context_cols, i)
+            ax.spines['right'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+            plot_line(data['attrition_bias'], with_confidence=False)
+            plt.title('{}'.format(context))
+            if i == 1:
+                plt.legend(loc=2, frameon=True, ncol=2)
+            if i > context_cols * (context_rows - 1):
+                plt.xlabel('Minimal number of reference attempts')
+            if i % context_cols == 1:
+                plt.ylabel('First attempt error')
+        _savefig(filename, 'attrition_bias_contexts')
+        plt.close()
+
 
     if 'weibull' in experiment_data.get('all', {}) and 'answers_density' in experiment_data.get('all', {}):
         rcParams['figure.figsize'] = 15, 10
@@ -1019,11 +1217,12 @@ plot_experiment_data(pa.get_experiment_data(
     answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=True,
     filter_invalid_tests=False, filter_invalid_response_time=False,
     #context_name='Europe', term_type='state',
-    keys=[
-        'item_occurences', 'learning_points', 'learning_points_all',
-        'learning_curve', 'learning_curve_fit', 'learning_curve_all',
-        'learning_curve_fit_all', 'learning_curve_reverse',
-        'learning_curve_fit_reverse', 'attrition_bias'
-    ]
+    keys='learning_slope'
+    #keys=[
+        #'item_occurences', 'learning_points', 'learning_points_all',
+        #'learning_curve', 'learning_curve_fit', 'learning_curve_all',
+        #'learning_curve_fit_all', 'learning_curve_reverse',
+        #'learning_curve_fit_reverse', 'attrition_bias', 'practice_error',
+    #]
     #keys=['progress', 'weibull', 'answers_density'], bootstrap_samples=1000
 ), 'target_difficulty')

@@ -370,7 +370,7 @@ def learning_slope(data, data_all, length=10, user_length=None, context_answer_l
         }
 
     data_users = set(data['user_id'].unique())
-    series_all = reference_series(data_all, length=length * 2, context_answer_limit=context_answer_limit)
+    series_all = reference_series(data_all, length=length, context_answer_limit=context_answer_limit)
 
     def _fit_learning_curve(series):
         mean_all_first = numpy.mean([serie[1][0] for serie in series])
@@ -385,7 +385,7 @@ def learning_slope(data, data_all, length=10, user_length=None, context_answer_l
             _learn_fun,
             numpy.arange(len(learning_curve)),
             numpy.array(map(lambda x: x[0], learning_curve)),
-            sigma=numpy.array(map(lambda x: numpy.sqrt((x[0] * (1 - x[0])) / x[1]), learning_curve))
+            sigma=numpy.array(map(lambda x: 1.0 / numpy.sqrt(x[1] + 1), learning_curve))
         )
         return opt[0]
 

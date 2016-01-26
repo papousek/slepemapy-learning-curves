@@ -33,7 +33,7 @@ LINES=['-', '--', '-.', ':']
 sns.set(**SNS_STYLE)
 
 MARKERS = "dos^"
-COLORS = sns.color_palette('gray')
+COLORS = sns.color_palette('gray')[2:6][::-1]
 #TARGET_DIR = 'europe-state'
 TARGET_DIR = '.'
 
@@ -137,7 +137,7 @@ def _resample(xs):
 def _format_group_name(group_name):
     try:
         group_name = int(group_name)
-        return '{} %'.format(group_name)
+        return 'C{}'.format(group_name)
     except:
         return group_name
 
@@ -522,7 +522,7 @@ def meta(data):
 
 def compute_experiment_data(term_type=None, term_name=None, context_name=None, answer_limit=10, curve_length=5, progress_length=60, filter_invalid_tests=True, with_confidence=False, keys=None, contexts=False, filter_invalid_response_time=True, school=None, bootstrap_samples=200, density_length=100):
     compute_rolling_success = keys is None or len(set(keys) & {'output_rolling_success', 'stay_on_rolling_success'}) != 0
-    data = pa.get_raw_data('answers',  datalib.load_data, 'experiment_cache',
+    data = pa.get_raw_data('answers',  datalib.load_data, 'experiment_cache', debug=True,
         answer_limit=answer_limit, filter_invalid_tests=filter_invalid_tests,
         filter_invalid_response_time=filter_invalid_response_time, rolling_success=compute_rolling_success
     )
@@ -645,7 +645,7 @@ def plot_line(data, with_confidence=True, markevery=None, invert=False, setups=N
         if invert:
             ys = 1 - ys
         linestyle = '' if skip_line else LINES[i]
-        ax.plot(group_xs, ys, label=_format_group_name(group_name), color=COLORS[i + 2], **group_kwargs)
+        ax.plot(group_xs, ys, label=_format_group_name(group_name), color=COLORS[i], **group_kwargs)
         if with_confidence:
             plt.fill_between(
                 group_xs,
@@ -930,7 +930,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
                     xs = range(len(group_data))
                     ys = map(lambda x: x['value'], sorted(group_data.values(), key=lambda x: x['difficulty']))
                     markevery=len(group_data) / 5
-                    plt.plot(xs, ys, label=_format_group_name(group_name), color=COLORS[j + 2], linewidth=5)
+                    plt.plot(xs, ys, label=_format_group_name(group_name), color=COLORS[j], linewidth=5)
                     plt.xlim(0, len(group_data) - 1)
                     if i > context_cols * (context_rows - 1):
                         plt.xlabel('Items sorted by difficulty')
@@ -1112,7 +1112,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
                     practice_error_plot[key].append(val)
         contexts = map(_format_context, contexts[:10])
         ax = plt.subplot(111)
-        plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]), color=COLORS[5])
+        plt.bar(range(len(answer_nums[:10])), map(lambda x: round(100 * x / float(sum(answer_nums))), answer_nums[:10]), color=COLORS[0])
         plt.title('Top 10 mostly practiced contexts')
         ax.set_xticks(numpy.arange(len(answer_nums[:10])),  minor=False)
         ax.set_xticklabels(contexts[:10],  minor=False, rotation=60)
@@ -1150,7 +1150,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
                 numpy.arange(len(group_data)) + i * 0.2,
                 values, 0.2,
                 yerr=zip(*confidence_vals), error_kw={'ecolor': 'black'},
-                color=COLORS[i + 2], hatch=HATCHES[i], label=_format_group_name(group_name),
+                color=COLORS[i], hatch=HATCHES[i], label=_format_group_name(group_name),
             )
             ax.set_xticks(numpy.arange(len(group_data)) + 0.4)
             ax.set_xticklabels(contexts, minor=False, rotation=60)
@@ -1164,9 +1164,9 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
 
         gs = GridSpec(2, 2, width_ratios=[2, 3], height_ratios=[4, 1], hspace=0)
         plt.subplot(gs.new_subplotspec((0, 0), rowspan=2))
-        plt.ylim(0, 0.7)
+        ylim_learning_curve()
         plt.title('Learning curve')
-        plot_line(experiment_data['all']['learning_curve_all'], with_confidence=False, marker=False, linewidth=5)
+        plot_line(experiment_data['all']['learning_curve_fit_all'], with_confidence=False, marker=False, linewidth=5)
         plt.xlabel('Attempt')
         plt.ylabel('Error rate')
         plt.legend(loc=1, frameon=True, ncol=2)
@@ -1189,7 +1189,7 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
                 numpy.arange(len(group_data)) + i * 0.2,
                 values, 0.2,
                 yerr=zip(*confidence_vals), error_kw={'ecolor': 'black'},
-                color=COLORS[i + 2], hatch=HATCHES[i], label=_format_group_name(group_name),
+                color=COLORS[i], hatch=HATCHES[i], label=_format_group_name(group_name),
             )
             ax.set_xticks(numpy.arange(len(group_data)) + 0.4)
             ax.set_xticklabels(contexts, minor=False, rotation=60)
@@ -1211,11 +1211,11 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
         plt.close()
 
     if 'contexts' in experiment_data and 'attrition_bias' in experiment_data.get('all', {}):
-        rcParams['figure.figsize'] = 7.5, 10
+        rcParams['figure.figsize'] = 15, 5
         contexts_to_plot = ['Europe, state', 'Asia, state']
         for i, context_name in enumerate(contexts_to_plot, start=1):
             data = experiment_data['contexts'][context_name]
-            ax = plt.subplot(2, 1, i)
+            ax = plt.subplot(1, 2, i)
             plot_line(data['attrition_bias'], with_confidence=False, marker=False, linewidth=5)
             plt.title('{}'.format(context_name))
             if i == 1:
@@ -1253,9 +1253,9 @@ def plot_experiment_data(experiment_data, filename, context_rows=3, context_cols
 plot_experiment_data(pa.get_experiment_data(
     'ab_random_random_3',
     compute_experiment_data,
-    'experiment_cache', cached=True,
+    'experiment_cache', cached=True, debug=True,
     answer_limit=1, curve_length=10, progress_length=100, density_length=300, contexts=True,
-    filter_invalid_tests=False, filter_invalid_response_time=False,
+    filter_invalid_response_time=False,
     #context_name='Europe', term_type='state',
     #keys=['learning_curve_fit'] , bootstrap_samples=100
     keys=[
@@ -1263,6 +1263,6 @@ plot_experiment_data(pa.get_experiment_data(
         'learning_curve', 'learning_curve_fit', 'learning_curve_all', 'learning_slope',
         'learning_curve_fit_all', 'learning_curve_reverse',
         'learning_curve_fit_reverse', 'attrition_bias', 'practice_error',
-    ]
+    ]#, bootstrap_samples=100
     #keys=['progress', 'weibull', 'answers_density'], bootstrap_samples=1000
 ), 'target_difficulty')

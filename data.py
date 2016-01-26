@@ -1,6 +1,6 @@
 import pandas
 import proso.analysis as pa
-from proso.geography.dfutil import iterdicts
+from proso.dfutil import iterdicts
 import numpy
 import os
 from geoip import geolite2
@@ -114,7 +114,7 @@ def get_country(ip):
 def prepare_public_data(dest):
     if not os.path.exists(dest):
         os.makedirs(dest)
-    answers = pa.get_raw_data('answers', load_data, 'experiment_cache', answer_limit=1)[[
+    answers = pa.get_raw_data('answers', load_data, 'experiment_cache', debug=True, answer_limit=1, filter_invalid_response_time=False)[[
         'id', 'time', 'response_time', 'item_answered_id', 'item_asked_id', 'user_id',
         'guess', 'metainfo_id', 'direction', 'experiment_setup_name', 'context_name', 'session_id'
     ]]
